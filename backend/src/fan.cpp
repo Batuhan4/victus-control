@@ -5,26 +5,72 @@
 #include <thread>
 #include <chrono>
 #include <atomic>
+#include <mutex>
 
 #include "fan.hpp"
 #include "util.hpp"
+#include "constants.hpp"
 
-static std::atomic<int> fan_thread_generation(0);
+// Thread management structure
+struct FanThreadManager {
+	std::thread worker_thread;
+	std::atomic<bool> should_stop{false};
+	std::mutex manager_mutex;
+	bool thread_active = false;
+	
+	void stop_and_join() {
+		std::lock_guard<std::mutex> lock(manager_mutex);
+		if (thread_active) {
+			should_stop = true;
+			if (worker_thread.joinable()) {
+				worker_thread.join();
+			}
+			thread_active = false;
+		}
+	}
+	
+	void start_new_worker(const std::string &mode) {
+		std::lock_guard<std::mutex> lock(manager_mutex);
+		stop_and_join_unsafe();
+		
+		should_stop = false;
+		worker_thread = std::thread([this, mode]() {
+			while (!should_stop) {
+				if (should_stop) break;
+				set_fan_mode(mode);
+				
+				// Sleep for FAN_REAPPLY_SECONDS, checking should_stop every second
+				for (int i = 0; i < FAN_REAPPLY_SECONDS && !should_stop; ++i) {
+					std::this_thread::sleep_for(std::chrono::seconds(1));
+				}
+			}
+		});
+		thread_active = true;
+	}
+	
+private:
+	void stop_and_join_unsafe() {
+		if (thread_active) {
+			should_stop = true;
+			if (worker_thread.joinable()) {
+				worker_thread.join();
+			}
+			thread_active = false;
+		}
+	}
+};
+
+static FanThreadManager fan_thread_manager;
 
 // call set_fan_mode every 100 seconds so that the mode doesn't revert back (weird hp behaviour)
 void fan_mode_trigger(const std::string mode) {
-    fan_thread_generation++;
-	if (mode == "AUTO") return;
-
-    std::thread([mode, gen = fan_thread_generation.load()]() {
-        while (fan_thread_generation == gen) {
-            set_fan_mode(mode);
-            for (int i = 0; i < 100; ++i) {
-                if (fan_thread_generation != gen) return;
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-            }
-        }
-    }).detach();
+	if (mode == "AUTO") {
+		fan_thread_manager.stop_and_join();
+		return;
+	}
+	
+	log(LogLevel::Info, "Starting fan mode trigger for mode: " + mode);
+	fan_thread_manager.start_new_worker(mode);
 }
 
 std::string get_fan_mode()
@@ -55,19 +101,25 @@ std::string get_fan_mode()
 		}
 		else
 		{
-			std::cerr << "Failed to open fan control file. Error: " << strerror(errno) << std::endl;
+			log(LogLevel::Error, "Failed to open fan control file: " + std::string(strerror(errno)));
 			return "ERROR: Unable to read fan mode";
 		}
 	}
 	else
 	{
-		std::cerr << "Hwmon directory not found" << std::endl;
+		log(LogLevel::Error, "Hwmon directory not found");
 		return "ERROR: Hwmon directory not found";
 	}
 }
 
 std::string set_fan_mode(const std::string &mode)
 {
+	// Input validation
+	if (!is_valid_fan_mode(mode)) {
+		log(LogLevel::Warn, "Invalid fan mode provided: " + mode);
+		return "ERROR: Invalid fan mode: " + mode;
+	}
+	
 	std::string hwmon_path = find_hwmon_directory("/sys/devices/platform/hp-wmi/hwmon");
 
 	if (!hwmon_path.empty())
@@ -82,11 +134,10 @@ std::string set_fan_mode(const std::string &mode)
 				fan_ctrl << "1";
 			else if (mode == "MAX")
 				fan_ctrl << "0";
-			else
-				return "ERROR: Invalid fan mode: " + mode;
 
 			fan_ctrl.flush();
 			if (fan_ctrl.fail()) {
+				log(LogLevel::Error, "Failed to write fan mode");
 				return "ERROR: Failed to write fan mode";
 			}
 			return "OK";
@@ -119,20 +170,26 @@ std::string get_fan_speed(const std::string &fan_num)
 		}
 		else
 		{
-			std::cerr << "Failed to open fan speed file. Error: " << strerror(errno) << std::endl;
+			log(LogLevel::Error, "Failed to open fan speed file: " + std::string(strerror(errno)));
 			return "ERROR: Unable to read fan speed";
 		}
 	}
 	else
 	{
-		std::cerr << "Hwmon directory not found" << std::endl;
+		log(LogLevel::Error, "Hwmon directory not found");
 		return "ERROR: Hwmon directory not found";
 	}
 }
 
 std::string set_fan_speed(const std::string &fan_num, const std::string &speed)
 {
-	std::cout << "Setting fan " << fan_num << " speed to " << speed << std::endl;
+	// Input validation
+	if (!is_valid_fan_speed(speed)) {
+		log(LogLevel::Warn, "Invalid fan speed provided: " + speed);
+		return "ERROR: Invalid fan speed: " + speed;
+	}
+	
+	log(LogLevel::Info, "Setting fan " + fan_num + " speed to " + speed);
 	std::string hwmon_path = find_hwmon_directory("/sys/devices/platform/hp-wmi/hwmon");
 
 	if (!hwmon_path.empty())
@@ -144,6 +201,7 @@ std::string set_fan_speed(const std::string &fan_num, const std::string &speed)
 			fan_file << speed;
 			fan_file.flush();
 			if (fan_file.fail()) {
+				log(LogLevel::Error, "Failed to write fan speed");
 				return "ERROR: Failed to write fan speed";
 			}
 			return "OK";
@@ -153,4 +211,10 @@ std::string set_fan_speed(const std::string &fan_num, const std::string &speed)
 	}
 	else
 		return "ERROR: Hwmon directory not found";
+}
+// Cleanup function for graceful shutdown
+void cleanup_fan_threads()
+{
+	log(LogLevel::Info, "Cleaning up fan threads");
+	fan_thread_manager.stop_and_join();
 }

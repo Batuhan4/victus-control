@@ -96,11 +96,15 @@ void VictusFanControl::update_fan_speeds()
 {
     auto response1 = socket_client->send_command_async(GET_FAN_SPEED, "1");
     std::string fan1_speed = response1.get();
-    if (fan1_speed.find("ERROR") != std::string::npos) fan1_speed = "N/A";
+    if (fan1_speed.find("ERROR") != std::string::npos || fan1_speed.length() > 8) {
+        fan1_speed = "N/A";
+    }
 
     auto response2 = socket_client->send_command_async(GET_FAN_SPEED, "2");
     std::string fan2_speed = response2.get();
-    if (fan2_speed.find("ERROR") != std::string::npos) fan2_speed = "N/A";
+    if (fan2_speed.find("ERROR") != std::string::npos || fan2_speed.length() > 8) {
+        fan2_speed = "N/A";
+    }
 
     gtk_label_set_text(GTK_LABEL(fan1_speed_label), ("Fan 1 Speed: " + fan1_speed + " RPM").c_str());
     gtk_label_set_text(GTK_LABEL(fan2_speed_label), ("Fan 2 Speed: " + fan2_speed + " RPM").c_str());

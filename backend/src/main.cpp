@@ -7,12 +7,25 @@
 #include <vector>
 #include <cstdint>
 #include <sstream>
+#include <signal.h>
+#include <atomic>
+#include <cerrno>
 
 #include "fan.hpp"
 #include "keyboard.hpp"
+#include "util.hpp"
+#include "constants.hpp"
 
 #define SOCKET_DIR "/run/victus-control"
 #define SOCKET_PATH SOCKET_DIR "/victus_backend.sock"
+
+// Global flag for graceful shutdown
+static std::atomic<bool> server_running(true);
+
+void signal_handler(int sig) {
+	log(LogLevel::Info, "Received signal, shutting down gracefully");
+	server_running = false;
+}
 
 // Helper function to reliably send a block of data
 bool send_all(int socket, const void *buffer, size_t length) {
@@ -57,25 +70,35 @@ void handle_command(const std::string &command_str, int client_socket)
 	{
         std::string fan_num;
         ss >> fan_num;
-		response = get_fan_speed(fan_num);
+        if (fan_num.empty()) {
+            response = "ERROR: Missing fan number";
+        } else {
+		    response = get_fan_speed(fan_num);
+        }
 	}
 	else if (command == "SET_FAN_SPEED")
 	{
 		std::string fan_num;
         std::string speed;
         ss >> fan_num >> speed;
-        if (!fan_num.empty() && !speed.empty()) {
-		    response = set_fan_speed(fan_num, speed);
-        } else {
+        if (fan_num.empty() || speed.empty()) {
             response = "ERROR: Invalid SET_FAN_SPEED command format";
+        } else {
+		    response = set_fan_speed(fan_num, speed);
         }
 	}
 	else if (command == "SET_FAN_MODE")
 	{
 		std::string mode;
         ss >> mode;
-		response = set_fan_mode(mode);
-		fan_mode_trigger(mode);
+        if (mode.empty()) {
+            response = "ERROR: Missing fan mode";
+        } else {
+		    response = set_fan_mode(mode);
+		    if (!is_error(response)) {
+		        fan_mode_trigger(mode);
+		    }
+        }
 	}
 	else if (command == "GET_FAN_MODE")
 	{
@@ -89,10 +112,10 @@ void handle_command(const std::string &command_str, int client_socket)
 	{
 		std::string r, g, b;
         ss >> r >> g >> b;
-        if (!r.empty() && !g.empty() && !b.empty()) {
-		    response = set_keyboard_color(r + " " + g + " " + b);
-        } else {
+        if (r.empty() || g.empty() || b.empty()) {
             response = "ERROR: Invalid SET_KEYBOARD_COLOR command format";
+        } else {
+		    response = set_keyboard_color(r + " " + g + " " + b);
         }
 	}
 	else if (command == "GET_KBD_BRIGHTNESS")
@@ -103,19 +126,87 @@ void handle_command(const std::string &command_str, int client_socket)
 	{
 		std::string value;
         ss >> value;
-		response = set_keyboard_brightness(value);
+        if (value.empty()) {
+            response = "ERROR: Missing brightness value";
+        } else {
+		    response = set_keyboard_brightness(value);
+        }
 	}
-	else
+	else {
+		log(LogLevel::Warn, "Unknown command received: " + command);
 		response = "ERROR: Unknown command";
+	}
 
     uint32_t len = response.length();
-    if (!send_all(client_socket, &len, sizeof(len))) return;
-    if (!send_all(client_socket, response.c_str(), len)) return;
+    if (!send_all(client_socket, &len, sizeof(len))) {
+        log(LogLevel::Error, "Failed to send response length");
+        return;
+    }
+    if (!send_all(client_socket, response.c_str(), len)) {
+        log(LogLevel::Error, "Failed to send response data");
+        return;
+    }
+}
+
+// RAII wrapper for client socket handling
+class ClientSocketGuard {
+public:
+    ClientSocketGuard(int socket) : socket_(socket) {}
+    ~ClientSocketGuard() { 
+        if (socket_ >= 0) {
+            close(socket_);
+            log(LogLevel::Info, "Client socket closed");
+        }
+    }
+    int get() const { return socket_; }
+private:
+    int socket_;
+};
+
+void handle_client(int client_socket) {
+    ClientSocketGuard guard(client_socket);
+    
+    log(LogLevel::Info, "Client connected");
+    
+    while (server_running) {
+        uint32_t cmd_len;
+        if (!read_all(client_socket, &cmd_len, sizeof(cmd_len))) {
+            log(LogLevel::Info, "Client disconnected or error reading command length");
+            break;
+        }
+
+        // Protocol hardening - reject oversized requests early
+        if (cmd_len > MAX_COMMAND_LENGTH) {
+            log(LogLevel::Warn, "Command too long (" + std::to_string(cmd_len) + " bytes), closing connection");
+            std::string error_response = "ERROR: Request too long";
+            uint32_t error_len = error_response.length();
+            send_all(client_socket, &error_len, sizeof(error_len));
+            send_all(client_socket, error_response.c_str(), error_len);
+            break;
+        }
+
+        if (cmd_len == 0) {
+            log(LogLevel::Warn, "Zero-length command received");
+            break;
+        }
+
+        std::vector<char> buffer(cmd_len);
+        if (!read_all(client_socket, buffer.data(), cmd_len)) {
+            log(LogLevel::Info, "Client disconnected or error reading command");
+            break;
+        }
+
+        handle_command(std::string(buffer.begin(), buffer.end()), client_socket);
+    }
 }
 
 int main()
 {
-	int server_socket, client_socket;
+	// Set up signal handlers for graceful shutdown
+	signal(SIGINT, signal_handler);
+	signal(SIGTERM, signal_handler);
+
+	int server_socket;
 	struct sockaddr_un server_addr;
 
 	unlink(SOCKET_PATH);
@@ -123,7 +214,7 @@ int main()
 	server_socket = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (server_socket < 0)
 	{
-		std::cerr << "Error creating socket: " << strerror(errno) << std::endl;
+		log(LogLevel::Error, "Error creating socket: " + std::string(strerror(errno)));
 		return 1;
 	}
 
@@ -133,64 +224,47 @@ int main()
 
 	if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
 	{
-		std::cerr << "Bind failed: " << strerror(errno) << std::endl;
+		log(LogLevel::Error, "Bind failed: " + std::string(strerror(errno)));
 		close(server_socket);
 		return 1;
 	}
 
 	if (chmod(SOCKET_PATH, 0660) < 0)
 	{
-		std::cerr << "Failed to set socket permissions: " << strerror(errno) << std::endl;
+		log(LogLevel::Error, "Failed to set socket permissions: " + std::string(strerror(errno)));
 		close(server_socket);
 		return 1;
 	}
 
 	if (listen(server_socket, 5) < 0)
 	{
-		std::cerr << "Listen failed: " << strerror(errno) << std::endl;
+		log(LogLevel::Error, "Listen failed: " + std::string(strerror(errno)));
 		close(server_socket);
 		return 1;
 	}
 
-	std::cout << "Server is listening..." << std::endl;
+	log(LogLevel::Info, "Server is listening...");
 
-	while (true)
+	while (server_running)
 	{
-		client_socket = accept(server_socket, nullptr, nullptr);
+		int client_socket = accept(server_socket, nullptr, nullptr);
 		if (client_socket < 0)
 		{
-			perror("accept");
+			if (errno == EINTR && !server_running) {
+				log(LogLevel::Info, "Accept interrupted, server shutting down");
+				break;
+			}
+			log(LogLevel::Error, "Accept failed: " + std::string(strerror(errno)));
 			continue;
 		}
 
-		std::cout << "Client connected" << std::endl;
-
-		while (true)
-		{
-            uint32_t cmd_len;
-            if (!read_all(client_socket, &cmd_len, sizeof(cmd_len))) {
-                std::cerr << "Client disconnected or error occurred while reading command length.\n";
-                break;
-            }
-
-            if (cmd_len > 1024) { // Basic sanity check
-                std::cerr << "Command too long. Closing connection.\n";
-                break;
-            }
-
-            std::vector<char> buffer(cmd_len);
-            if (!read_all(client_socket, buffer.data(), cmd_len)) {
-                std::cerr << "Client disconnected or error occurred while reading command.\n";
-                break;
-            }
-
-			handle_command(std::string(buffer.begin(), buffer.end()), client_socket);
-		}
-
-		close(client_socket);
-		std::cout << "Client disconnected" << std::endl;
+		handle_client(client_socket);
+		// client_socket is automatically closed by ClientSocketGuard
 	}
 
+	log(LogLevel::Info, "Shutting down server");
+	cleanup_fan_threads();
 	close(server_socket);
+	unlink(SOCKET_PATH);
 	return 0;
 }
