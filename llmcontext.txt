@@ -1,0 +1,267 @@
+# Prompt for Advanced AI Agent: Debugging a C++ Fan Control Application
+
+## High-Level Goal
+Diagnose and fix a subtle bug in a C++ / GTK application (`victus-control`) where manual fan control fails, despite the same commands working perfectly when executed directly in a shell.
+
+## The Core Problem
+The application is designed to control laptop fans by writing to `/sysfs` files exposed by the `hp-wmi` kernel module. When the user selects "MANUAL" fan mode, the application sends commands to set the mode and then set the RPM for both fans. The backend service reports receiving these commands but fails to execute the speed change, returning "ERROR: Unable to set fan speed".
+
+The mystery is that executing the *exact same sequence of commands* manually in a terminal as the `root` user works perfectly, controlling both fans as expected.
+
+## System Context
+- **Hardware:** HP Victus 16-s00xxxx
+- **OS:** CachyOS (Arch Linux based)
+- **Kernel Module:** A specific DKMS fork of `hp-wmi` is in use.
+- **Permissions:** All permissions have been meticulously solved. The backend service runs as a dedicated user (`victus-backend`) which is part of the `victus` group. A `udev` rule correctly sets the ownership of the relevant `/sysfs` files (`pwm1_enable`, `fan1_target`, `fan2_target`) to the `victus` group with write permissions. **This is not a file permissions issue.**
+
+## Key Findings & Debugging History
+
+1.  **Hardware Quirk Discovered:** We have proven through direct command-line testing that manual fan control has a specific requirement: after setting the mode to MANUAL, speed commands must be sent to **both** `fan1_target` and `fan2_target`. Attempting to control only one fan fails.
+2.  **Race Condition Hypothesis:** We initially suspected a race condition where speed commands arrived before the mode change was processed by the hardware.
+3.  **Attempted Solution (Sequential Logic):** The frontend was rewritten to be synchronous. It now sends the `SET_FAN_MODE MANUAL` command and *waits* for the "OK" response from the backend before sending the `SET_FAN_SPEED` commands. This should have eliminated any race condition, but the error persists.
+
+## The "Working" Command-Line Sequence
+This exact sequence, when run as root, successfully puts the fans into manual mode and sets their speed. The `hwmon8` directory is specific to this machine, but the sequence of writes is what's important.
+
+```bash
+# 1. Set mode to MANUAL
+echo 1 | sudo tee /sys/devices/platform/hp-wmi/hwmon/hwmon8/pwm1_enable
+
+# 2. Set speed for BOTH fans
+echo 5600 | sudo tee /sys/devices/platform/hp-wmi/hwmon/hwmon8/fan1_target
+echo 5600 | sudo tee /sys/devices/platform/hp-wmi/hwmon/hwmon8/fan2_target
+```
+
+## The "Failing" Application Output
+This is the log output from the application when the user selects "MANUAL" mode. Note how it sends the commands sequentially but still receives an error.
+
+```
+Sending command: SET_FAN_MODE MANUAL
+Received response: OK
+Sending command: SET_FAN_SPEED 1 2000
+Received response: ERROR: Unable to set fan speed
+Sending command: SET_FAN_SPEED 2 2000
+Received response: ERROR: Unable to set fan speed
+```
+
+## The Question for the AI Agent
+Given the context above and the full source code below, what is the subtle bug in the application's C++ logic that causes this failure? The problem is not permissions, hardware capability, or a simple race condition that can be solved with a `sleep`. It is likely a logic error in how the C++ code interacts with the system compared to how the shell does. Propose a specific, high-quality code modification to fix the issue, adhering to C++ best practices.
+
+---
+
+## Full Relevant Source Code
+
+### `backend/src/main.cpp`
+```cpp
+#include <iostream>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <string>
+#include <vector>
+#include <cstdint>
+#include <sstream>
+#include <csignal>
+#include <cstring>
+#include <cerrno>
+#include "fan.hpp"
+#include "keyboard.hpp"
+
+#define SOCKET_DIR "/run/victus-control"
+#define SOCKET_PATH SOCKET_DIR "/victus_backend.sock"
+
+static volatile sig_atomic_t server_running = 1;
+
+void signal_handler(int sig) {
+    if (sig == SIGTERM || sig == SIGINT) {
+        server_running = 0;
+    }
+}
+
+// Helper functions (send_all, read_all)...
+
+void handle_command(const std::string &command_str, int client_socket)
+{
+    std::stringstream ss(command_str);
+    std::string command;
+    ss >> command;
+	std::string response;
+
+	if (command == "SET_FAN_MODE")
+	{
+		std::string mode;
+        ss >> mode;
+		response = set_fan_mode(mode);
+		fan_mode_trigger(mode);
+	}
+	else if (command == "SET_FAN_SPEED")
+	{
+		std::string fan_num;
+        std::string speed;
+        ss >> fan_num >> speed;
+        if (!fan_num.empty() && !speed.empty()) {
+		    response = set_fan_speed(fan_num, speed);
+        } else {
+            response = "ERROR: Invalid SET_FAN_SPEED command format";
+        }
+	}
+    // ... other commands ...
+    else {
+		response = "ERROR: Unknown command";
+    }
+
+    uint32_t len = response.length();
+    if (!send_all(client_socket, &len, sizeof(len))) return;
+    if (!send_all(client_socket, response.c_str(), len)) return;
+}
+
+int main() {
+    // main server loop, signal handling, etc.
+    // ...
+}
+```
+
+### `backend/src/fan.cpp`
+```cpp
+#include "fan.hpp"
+#include "util.hpp"
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <thread>
+#include <chrono>
+#include <atomic>
+#include <cstring>
+#include <cerrno>
+
+// ... get_fan_mode, fan_mode_trigger, get_fan_speed ...
+
+std::string set_fan_mode(const std::string &mode)
+{
+	std::string hwmon_path = find_hwmon_directory("/sys/devices/platform/hp-wmi/hwmon");
+	if (!hwmon_path.empty())
+	{
+		std::ofstream fan_ctrl(hwmon_path + "/pwm1_enable");
+		if (fan_ctrl)
+		{
+			if (mode == "AUTO") fan_ctrl << "2";
+			else if (mode == "MANUAL") fan_ctrl << "1";
+			else if (mode == "MAX") fan_ctrl << "0";
+			else return "ERROR: Invalid fan mode: " + mode;
+
+			fan_ctrl.flush();
+			if (fan_ctrl.fail()) {
+				return "ERROR: Failed to write fan mode";
+			}
+			return "OK";
+		}
+		else return "ERROR: Unable to set fan mode";
+	}
+	else return "ERROR: Hwmon directory not found";
+}
+
+std::string set_fan_speed(const std::string &fan_num, const std::string &speed)
+{
+	std::cout << "Setting fan " << fan_num << " speed to " << speed << std::endl;
+	std::string hwmon_path = find_hwmon_directory("/sys/devices/platform/hp-wmi/hwmon");
+	if (!hwmon_path.empty())
+	{
+		std::ofstream fan_file(hwmon_path + "/fan" + fan_num + "_target");
+		if (fan_file)
+		{
+			fan_file << speed;
+			fan_file.flush();
+			if (fan_file.fail()) {
+				return "ERROR: Failed to write fan speed";
+			}
+			return "OK";
+		}
+		else return "ERROR: Unable to set fan speed";
+	}
+	else return "ERROR: Hwmon directory not found";
+}
+```
+
+### `frontend/src/fan.cpp`
+```cpp
+#include "fan.hpp"
+#include "socket.hpp"
+#include <iostream>
+#include <string>
+#include <thread>
+#include <chrono>
+
+// ... constructor and other UI functions ...
+
+void VictusFanControl::set_fan_rpm(int level)
+{
+    if (level < 1 || level > RPM_STEPS) return;
+    int target_rpm = MIN_RPM + (level - 1) * ((MAX_RPM - MIN_RPM) / (RPM_STEPS - 1));
+    std::string rpm_str = std::to_string(target_rpm);
+    socket_client->send_command_async(SET_FAN_SPEED, "1 " + rpm_str);
+    socket_client->send_command_async(SET_FAN_SPEED, "2 " + rpm_str);
+}
+
+void VictusFanControl::on_mode_changed(GtkComboBox *widget, gpointer data)
+{
+    VictusFanControl *self = static_cast<VictusFanControl*>(data);
+    gchar *mode = gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(widget));
+    if (mode) {
+        std::string mode_str(mode);
+        
+        // Send the mode command and wait for it to complete.
+        auto result = self->socket_client->send_command_async(SET_FAN_MODE, mode_str).get();
+
+        if (result == "OK") {
+            // If we are entering manual mode, now we can safely set the fan speed.
+            if (mode_str == "MANUAL") {
+                int level = static_cast<int>(gtk_range_get_value(GTK_RANGE(self->speed_slider)));
+                self->set_fan_rpm(level);
+            }
+        } else {
+            std::cerr << "Failed to set fan mode: " << result << std::endl;
+        }
+        
+        g_free(mode);
+        self->update_ui_from_system_state();
+    }
+}
+
+void VictusFanControl::on_speed_slider_changed(GtkRange *range, gpointer data)
+{
+    VictusFanControl *self = static_cast<VictusFanControl*>(data);
+    int level = static_cast<int>(gtk_range_get_value(range));
+    self->set_fan_rpm(level);
+}
+```
+
+### `frontend/src/socket.hpp`
+```cpp
+#ifndef VICTUS_SOCKET_HPP
+#define VICTUS_SOCKET_HPP
+#include <string>
+#include <future>
+#include <unordered_map>
+#include <mutex>
+
+enum ServerCommands
+{
+	GET_FAN_SPEED,
+    SET_FAN_SPEED,
+	SET_FAN_MODE,
+	GET_FAN_MODE,
+    // ... other commands ...
+};
+
+class VictusSocketClient
+{
+public:
+	VictusSocketClient(const std::string &socket_path);
+	~VictusSocketClient();
+	std::future<std::string> send_command_async(ServerCommands type, const std::string &command = "");
+private:
+    // ...
+};
+#endif // VICTUS_SOCKET_HPP
+```

@@ -1,10 +1,9 @@
-# Grant access to HP WMI devices to the victus-backend group
-SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", ATTR{pwm1_enable}=="?*", GROUP="victus-backend", MODE="0664"
-SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", ATTR{fan1_input}=="?*", GROUP="victus-backend", MODE="0444"
-SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", ATTR{fan2_input}=="?*", GROUP="victus-backend", MODE="0444"
-SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", ATTR{fan1_target}=="?*", GROUP="victus-backend", MODE="0664"
-SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", ATTR{fan2_target}=="?*", GROUP="victus-backend", MODE="0664"
+# Grant access to HP WMI devices to the victus group
+SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", GROUP="victus", MODE="0664"
+SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", ACTION=="add|change", RUN+="/bin/sh -c 'chgrp victus /sys$DEVPATH/fan*_target && chmod 664 /sys$DEVPATH/fan*_target'"
+SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", ATTR{fan1_input}=="?*", GROUP="victus", MODE="0444"
+SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", ATTR{fan2_input}=="?*", GROUP="victus", MODE="0444"
 
 # Grant access to HP keyboard LEDs to the victus-backend group
-SUBSYSTEM=="leds", KERNELS=="hp::kbd_backlight", ATTR{multi_intensity}=="?*", GROUP="victus-backend", MODE="0664"
-SUBSYSTEM=="leds", KERNELS=="hp::kbd_backlight", ATTR{brightness}=="?*", GROUP="victus-backend", MODE="0664"
+SUBSYSTEM=="leds", KERNELS=="hp::kbd_backlight", ATTR{multi_intensity}=="?*", GROUP="victus", MODE="0664"
+SUBSYSTEM=="leds", KERNELS=="hp::kbd_backlight", ATTR{brightness}=="?*", GROUP="victus", MODE="0664"

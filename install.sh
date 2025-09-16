@@ -35,6 +35,14 @@ else
     echo "User 'victus-backend' already exists."
 fi
 
+# Add victus-backend to the victus group
+if ! groups victus-backend | grep -q '\bvictus\b'; then
+    usermod -aG victus victus-backend
+    echo "User 'victus-backend' added to the 'victus' group."
+else
+    echo "User 'victus-backend' is already in the 'victus' group."
+fi
+
 # Create the victus user group if it doesn't exist
 if ! getent group victus > /dev/null; then
     groupadd victus
@@ -94,19 +102,7 @@ ninja -C build
 ninja -C build install
 echo "Application built and installed."
 
-# --- 5. Create Udev Rule for Fan Control Permissions ---
-echo "--> Creating udev rule for fan control permissions..."
-cat << 'EOF' > /etc/udev/rules.d/99-hp-wmi-permissions.rules
-# Grant victus group write access to HP WMI fan control files.
-SUBSYSTEM=="hwmon", ATTR{name}=="hp", DRIVERS=="hp-wmi", ACTION=="add", RUN+="/bin/sh -c 'chgrp victus /sys%p/pwm1_enable && chmod g+w /sys%p/pwm1_enable'"
-
-# Grant victus group write access to HP WMI keyboard backlight files.
-SUBSYSTEM=="leds", KERNEL=="hp::kbd_backlight", ACTION=="add", RUN+="/bin/sh -c 'chgrp victus /sys%p/brightness && chmod g+w /sys%p/brightness'"
-SUBSYSTEM=="leds", KERNEL=="hp::kbd_backlight", ACTION=="add", RUN+="/bin/sh -c 'chgrp victus /sys%p/multi_intensity && chmod g+w /sys%p/multi_intensity'"
-EOF
-echo "Udev rule created."
-
-# --- 6. Enable Backend Service ---
+# --- 5. Enable Backend Service ---
 echo "--> Configuring and starting backend service..."
 # Ensure the tmpfiles.d config is applied immediately to create the socket directory
 systemd-tmpfiles --create || {
@@ -131,4 +127,3 @@ echo ""
 echo "IMPORTANT: For the group changes to take full effect, please log out and log back in."
 echo "After logging back in, you can launch the application from your desktop menu or by running 'victus-control' in the terminal."
 echo ""
-
