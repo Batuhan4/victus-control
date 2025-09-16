@@ -78,6 +78,14 @@ void VictusFanControl::update_fan_speeds()
 	auto response2 = socket_client->send_command_async(GET_FAN_SPEED, "2");
 	std::string fan2_speed = response2.get();
 
+	// Handle error responses
+	if (fan1_speed.find("ERROR") != std::string::npos) {
+		fan1_speed = "N/A";
+	}
+	if (fan2_speed.find("ERROR") != std::string::npos) {
+		fan2_speed = "N/A";
+	}
+
 	std::string fan1_text = "Fan1 Speed: " + fan1_speed + " RPM";
 	std::string fan2_text = "Fan2 Speed: " + fan2_speed + " RPM";
 

@@ -1,5 +1,7 @@
 #include <fstream>
 #include <sstream>
+#include <cstring>
+#include <cerrno>
 
 #include "keyboard.hpp"
 
@@ -27,6 +29,10 @@ std::string set_keyboard_color(const std::string &color)
 	if (rgb)
 	{
 		rgb << color;
+		rgb.flush();
+		if (rgb.fail()) {
+			return "ERROR: Failed to write RGB color";
+		}
 		return "OK";
 	}
 	else
@@ -58,6 +64,10 @@ std::string set_keyboard_brightness(const std::string &value)
     if (brightness)
     {
         brightness << value;
+        brightness.flush();
+        if (brightness.fail()) {
+            return "ERROR: Failed to write keyboard brightness";
+        }
         return "OK";
     }
     else

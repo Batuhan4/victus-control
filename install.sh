@@ -14,7 +14,10 @@ echo "--- Starting Victus Control Installation ---"
 
 # --- 1. Install Dependencies ---
 echo "--> Installing required packages..."
-pacman -S --needed --noconfirm meson ninja gtk4 git dkms linux-headers
+pacman -S --needed --noconfirm meson ninja gtk4 git dkms linux-headers || {
+    echo "Error: Failed to install dependencies. Please check your internet connection and package repositories."
+    exit 1
+}
 
 # --- 2. Create Users and Groups ---
 echo "--> Creating secure users and groups..."
@@ -89,9 +92,18 @@ echo "Kernel module installed and loaded."
 
 # --- 4. Build and Install victus-control ---
 echo "--> Building and installing the application..."
-meson setup build --prefix=/usr
-ninja -C build
-ninja -C build install
+meson setup build --prefix=/usr || {
+    echo "Error: Failed to setup build directory"
+    exit 1
+}
+ninja -C build || {
+    echo "Error: Failed to build the application"
+    exit 1
+}
+ninja -C build install || {
+    echo "Error: Failed to install the application"
+    exit 1
+}
 echo "Application built and installed."
 
 # --- 5. Create Udev Rule for Fan Control Permissions ---
@@ -109,10 +121,20 @@ echo "Udev rule created."
 # --- 6. Enable Backend Service ---
 echo "--> Configuring and starting backend service..."
 # Ensure the tmpfiles.d config is applied immediately to create the socket directory
-systemd-tmpfiles --create
-systemctl daemon-reload
-udevadm control --reload-rules && udevadm trigger
-systemctl enable --now victus-backend.service
+systemd-tmpfiles --create || {
+    echo "Warning: Failed to create tmpfiles, continuing..."
+}
+systemctl daemon-reload || {
+    echo "Error: Failed to reload systemd daemon"
+    exit 1
+}
+udevadm control --reload-rules && udevadm trigger || {
+    echo "Warning: Failed to reload udev rules, continuing..."
+}
+systemctl enable --now victus-backend.service || {
+    echo "Error: Failed to enable/start victus-backend service"
+    exit 1
+}
 echo "Backend service enabled and started."
 
 echo ""

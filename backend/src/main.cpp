@@ -6,12 +6,23 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <cstring>
+#include <cerrno>
+#include <signal.h>
 
 #include "fan.hpp"
 #include "keyboard.hpp"
 
 #define SOCKET_DIR "/run/victus-control"
 #define SOCKET_PATH SOCKET_DIR "/victus_backend.sock"
+
+static volatile sig_atomic_t server_running = 1;
+
+void signal_handler(int sig) {
+    if (sig == SIGTERM || sig == SIGINT) {
+        server_running = 0;
+    }
+}
 
 // Helper function to reliably send a block of data
 bool send_all(int socket, const void *buffer, size_t length) {
@@ -99,6 +110,10 @@ int main()
 	int server_socket, client_socket;
 	struct sockaddr_un server_addr;
 
+	// Set up signal handlers for graceful shutdown
+	signal(SIGTERM, signal_handler);
+	signal(SIGINT, signal_handler);
+
 	unlink(SOCKET_PATH);
 
 	server_socket = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -135,11 +150,15 @@ int main()
 
 	std::cout << "Server is listening..." << std::endl;
 
-	while (true)
+	while (server_running)
 	{
 		client_socket = accept(server_socket, nullptr, nullptr);
 		if (client_socket < 0)
 		{
+			if (errno == EINTR) {
+				// Interrupted by signal, check if we should continue
+				continue;
+			}
 			perror("accept");
 			continue;
 		}
@@ -173,5 +192,7 @@ int main()
 	}
 
 	close(server_socket);
+	unlink(SOCKET_PATH);
+	std::cout << "Server shutdown gracefully" << std::endl;
 	return 0;
 }

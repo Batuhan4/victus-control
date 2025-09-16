@@ -1,8 +1,10 @@
 #include <gtk/gtk.h>
+#include <memory>
 
 #include "about.hpp"
 #include "fan.hpp"
 #include "keyboard.hpp"
+#include "socket.hpp"
 
 class VictusControl
 {
@@ -12,9 +14,9 @@ public:
 	GtkWidget *menu_button;
 	GtkWidget *menu;
 
-	VictusSocketClient *socket_client;
-	VictusFanControl fan_control;
-	VictusKeyboardControl keyboard_control;
+	std::shared_ptr<VictusSocketClient> socket_client;
+	std::unique_ptr<VictusFanControl> fan_control;
+	std::unique_ptr<VictusKeyboardControl> keyboard_control;
 	VictusAbout about;
 
 	VictusControl();

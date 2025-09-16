@@ -5,6 +5,8 @@
 #include <thread>
 #include <chrono>
 #include <atomic>
+#include <cstring>
+#include <cerrno>
 
 #include "fan.hpp"
 #include "util.hpp"
@@ -18,7 +20,10 @@ void fan_mode_trigger(const std::string mode) {
 
     std::thread([mode, gen = fan_thread_generation.load()]() {
         while (fan_thread_generation == gen) {
-            set_fan_mode(mode);
+            std::string result = set_fan_mode(mode);
+            if (result != "OK") {
+                std::cerr << "Failed to reapply fan mode: " << result << std::endl;
+            }
             for (int i = 0; i < 100; ++i) {
                 if (fan_thread_generation != gen) return;
                 std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -82,7 +87,13 @@ std::string set_fan_mode(const std::string &mode)
 				fan_ctrl << "1";
 			else if (mode == "MAX")
 				fan_ctrl << "0";
+			else
+				return "ERROR: Invalid fan mode: " + mode;
 
+			fan_ctrl.flush();
+			if (fan_ctrl.fail()) {
+				return "ERROR: Failed to write fan mode";
+			}
 			return "OK";
 		}
 		else
@@ -136,6 +147,10 @@ std::string set_fan_speed(const std::string &fan_num, const std::string &speed)
 		if (fan_file)
 		{
 			fan_file << speed;
+			fan_file.flush();
+			if (fan_file.fail()) {
+				return "ERROR: Failed to write fan speed";
+			}
 			return "OK";
 		}
 		else

@@ -5,6 +5,9 @@
 #include <iostream>
 #include <cstring>
 #include <vector>
+#include <cerrno>
+#include <future>
+#include <mutex>
 
 // Helper function to reliably send a block of data
 bool send_all(int socket, const void *buffer, size_t length) {
@@ -75,6 +78,7 @@ bool VictusSocketClient::connect_to_server()
 	addr.sun_family = AF_UNIX;
 	strncpy(addr.sun_path, socket_path.c_str(), sizeof(addr.sun_path) - 1);
 
+	// Try to connect with a timeout
 	if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) == -1)
 	{
 		std::cerr << "Failed to connect to the server: " << strerror(errno) << std::endl;
@@ -122,7 +126,7 @@ std::string VictusSocketClient::send_command(const std::string &command)
     }
 
     if (response_len > 4096) { // Sanity check
-        std::cerr << "Response too long, closing socket." << std::endl;
+        std::cerr << "Response too long (" << response_len << " bytes), closing socket." << std::endl;
         close_socket();
         return "ERROR: Response too long";
     }
