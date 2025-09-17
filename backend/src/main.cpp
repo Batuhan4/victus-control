@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cerrno>
 #include <cstring>
+#include <csignal>
 
 #include "fan.hpp"
 #include "keyboard.hpp"
@@ -195,6 +196,12 @@ int main()
 	int server_socket, client_socket;
 	struct sockaddr_un server_addr;
 
+	// Create socket directory if it doesn't exist
+	if (mkdir(SOCKET_DIR, 0755) == -1 && errno != EEXIST) {
+		std::cerr << "Failed to create socket directory: " << strerror(errno) << std::endl;
+		return 1;
+	}
+
 	unlink(SOCKET_PATH);
 
 	server_socket = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -230,6 +237,16 @@ int main()
 	}
 
 	std::cout << "Server is listening..." << std::endl;
+
+	// Install signal handlers for clean shutdown
+	signal(SIGINT, [](int) { 
+		std::cout << "\nReceived SIGINT, shutting down..." << std::endl;
+		exit(0);
+	});
+	signal(SIGTERM, [](int) { 
+		std::cout << "\nReceived SIGTERM, shutting down..." << std::endl;
+		exit(0);
+	});
 
 	while (true)
 	{
@@ -269,5 +286,6 @@ int main()
 	}
 
 	close(server_socket);
+	unlink(SOCKET_PATH); // Clean up socket file
 	return 0;
 }

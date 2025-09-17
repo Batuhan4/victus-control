@@ -16,7 +16,7 @@ public:
 
 private:
 	GtkWidget *toggle_button;
-	GtkColorChooser *color_chooser;
+	GtkWidget *color_button;
 	GtkWidget *apply_button;
 	GtkLabel *current_color_label;
 	GtkLabel *current_state_label;
@@ -29,7 +29,7 @@ private:
 	void update_keyboard_color(const GdkRGBA &color);
 
 	static void on_toggle_clicked(GtkWidget *widget, gpointer data);
-	static void on_color_activated(GtkColorChooser *widget, gpointer data);
+	static void on_color_set(GtkColorButton *widget, gpointer data);
 	static void on_apply_clicked(GtkWidget *widget, gpointer data);
 	static void update_current_color_label(gpointer data);
 

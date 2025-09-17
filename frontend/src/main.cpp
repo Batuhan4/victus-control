@@ -116,20 +116,35 @@ int main(int argc, char *argv[])
 		app.run();
 	} catch (const std::exception &e) {
 		std::cerr << "An unhandled exception occurred: " << e.what() << std::endl;
-		GtkWidget *error_dialog = gtk_message_dialog_new(
-			nullptr,
-			GTK_DIALOG_DESTROY_WITH_PARENT,
-			GTK_MESSAGE_ERROR,
-			GTK_BUTTONS_CLOSE,
-			"An error occurred: %s",
-			e.what()
-		);
+		
+		GtkWidget *error_dialog = gtk_window_new();
 		gtk_window_set_title(GTK_WINDOW(error_dialog), "Error");
-		g_signal_connect(error_dialog, "response", G_CALLBACK(gtk_window_destroy), nullptr);
+		gtk_window_set_default_size(GTK_WINDOW(error_dialog), 400, 200);
+		gtk_window_set_modal(GTK_WINDOW(error_dialog), TRUE);
+		
+		GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+		gtk_widget_set_margin_start(box, 20);
+		gtk_widget_set_margin_end(box, 20);
+		gtk_widget_set_margin_top(box, 20);
+		gtk_widget_set_margin_bottom(box, 20);
+		gtk_window_set_child(GTK_WINDOW(error_dialog), box);
+		
+		GtkWidget *label = gtk_label_new(("An error occurred: " + std::string(e.what())).c_str());
+		gtk_widget_set_halign(label, GTK_ALIGN_CENTER);
+		gtk_box_append(GTK_BOX(box), label);
+		
+		GtkWidget *close_button = gtk_button_new_with_label("Close");
+		g_signal_connect_swapped(close_button, "clicked", G_CALLBACK(gtk_window_destroy), error_dialog);
+		gtk_box_append(GTK_BOX(box), close_button);
+		
 		gtk_widget_set_visible(error_dialog, true);
 		
 		GMainLoop *loop = g_main_loop_new(nullptr, FALSE);
+		g_signal_connect(error_dialog, "destroy", G_CALLBACK(+[](GtkWidget *, gpointer loop) {
+			g_main_loop_quit(static_cast<GMainLoop *>(loop));
+		}), loop);
 		g_main_loop_run(loop);
+		g_main_loop_unref(loop);
 		return 1;
 	}
 
