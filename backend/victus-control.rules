@@ -1,6 +1,6 @@
 # Grant access to HP WMI devices to the victus group
 SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", GROUP="victus", MODE="0664"
-SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", ACTION=="add|change", RUN+="/bin/sh -c 'chgrp victus /sys$DEVPATH/fan*_target && chmod 664 /sys$DEVPATH/fan*_target'"
+# Removed fragile RUN rule that raced attribute creation
 SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", ATTR{fan1_input}=="?*", GROUP="victus", MODE="0444"
 SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", ATTR{fan2_input}=="?*", GROUP="victus", MODE="0444"
 

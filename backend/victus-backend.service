@@ -8,5 +8,22 @@ Restart=always
 User=victus-backend
 Group=victus
 
+# Provide minimal capability to bypass DAC permission checks on sysfs attributes
+AmbientCapabilities=CAP_DAC_OVERRIDE
+CapabilityBoundingSet=CAP_DAC_OVERRIDE
+NoNewPrivileges=yes
+
+# Hardening that does not interfere with writing to /sys
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX
+
 [Install]
 WantedBy=multi-user.target
