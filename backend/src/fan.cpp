@@ -103,6 +103,7 @@ static std::optional<std::string> find_thermal_zone_by_type(const std::vector<st
 
         std::string sensor_type;
         std::getline(type_file, sensor_type);
+        type_file.close(); // Explicitly close file
         std::string lowered = to_lower_copy(sensor_type);
 
         if (!fallback) {
@@ -143,6 +144,7 @@ static std::optional<std::string> find_hwmon_temp_sensor(const std::vector<std::
         std::string name_value;
         if (name_file) {
             std::getline(name_file, name_value);
+            name_file.close(); // Explicitly close file
         }
         std::string lowered_name = to_lower_copy(name_value);
 
@@ -181,6 +183,7 @@ static std::optional<std::string> find_hwmon_temp_sensor(const std::vector<std::
             if (label_file) {
                 std::string label_value;
                 std::getline(label_file, label_value);
+                label_file.close(); // Explicitly close file
                 std::string lowered_label = to_lower_copy(label_value);
 
                 for (const auto &hint : label_hints) {
@@ -294,6 +297,7 @@ static std::optional<double> read_temperature_celsius(const std::optional<std::s
 
     long value = 0;
     file >> value;
+    file.close(); // Explicitly close file
     if (file.fail()) {
         return std::nullopt;
     }
@@ -310,6 +314,7 @@ static std::optional<double> read_cpu_usage_pct()
 
     std::string line;
     std::getline(stat_file, line);
+    stat_file.close(); // Explicitly close file
     std::istringstream iss(line);
 
     std::string label;
@@ -355,6 +360,7 @@ static std::optional<double> read_gpu_usage_pct()
 
     double value = 0.0;
     file >> value;
+    file.close(); // Explicitly close file
     if (file.fail()) {
         return std::nullopt;
     }
@@ -374,6 +380,10 @@ static ThermalSnapshot collect_snapshot()
 
 static int fan_max_for_index(size_t index)
 {
+    if (index >= 2) {
+        return kBetterAutoMaxFallback[1]; // Safe fallback for invalid index
+    }
+    
     std::call_once(fan_max_once[index], [index]() {
         std::string hwmon_path = find_hwmon_directory("/sys/devices/platform/hp-wmi/hwmon");
         if (!hwmon_path.empty()) {
@@ -382,6 +392,7 @@ static int fan_max_for_index(size_t index)
             if (file) {
                 int value = 0;
                 file >> value;
+                file.close(); // Explicitly close file
                 if (!file.fail() && value > 0) {
                     fan_max_cache[index] = value;
                     return;
@@ -582,14 +593,11 @@ static void better_auto_worker()
 
 static void stop_better_auto()
 {
-    if (better_auto_running.exchange(false, std::memory_order_acq_rel)) {
-        if (better_auto_thread.joinable()) {
-            better_auto_thread.join();
-        }
-    } else if (better_auto_thread.joinable()) {
+    better_auto_running.store(false, std::memory_order_acq_rel);
+    if (better_auto_thread.joinable()) {
         better_auto_thread.join();
     }
-    better_auto_thread = std::thread();
+    better_auto_thread = std::thread(); // Reset to default-constructed state
 }
 
 static std::string start_better_auto()
@@ -866,8 +874,9 @@ std::string set_fan_speed(const std::string &fan_num, const std::string &speed, 
         }
         else
         {
-            std::cerr << "Failed to execute set-fan-speed.sh for fan " << fan_num << ". Exit code: " << WEXITSTATUS(result) << std::endl;
-            return "ERROR: Failed to set fan speed";
+            int exit_code = WEXITSTATUS(result);
+            std::cerr << "Failed to execute set-fan-speed.sh for fan " << fan_num << ". Exit code: " << exit_code << std::endl;
+            return "ERROR: Failed to set fan speed (exit code: " + std::to_string(exit_code) + ")";
         }
     }
 
@@ -897,7 +906,8 @@ std::string set_fan_speed(const std::string &fan_num, const std::string &speed, 
     }
     else
     {
-        std::cerr << "Failed to execute set-fan-speed.sh for fan " << fan_num << ". Exit code: " << WEXITSTATUS(result) << std::endl;
-        return "ERROR: Failed to set fan speed";
+        int exit_code = WEXITSTATUS(result);
+        std::cerr << "Failed to execute set-fan-speed.sh for fan " << fan_num << ". Exit code: " << exit_code << std::endl;
+        return "ERROR: Failed to set fan speed (exit code: " + std::to_string(exit_code) + ")";
     }
 }

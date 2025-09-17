@@ -15,6 +15,7 @@ std::string get_keyboard_color()
 		std::string rgb_mode = buffer.str();
 		rgb_mode.erase(rgb_mode.find_last_not_of(" \n\r\t") + 1);
 
+		rgb.close(); // Explicitly close file
 		return rgb_mode;
 	}
 	else
@@ -50,6 +51,7 @@ std::string get_keyboard_brightness()
         std::string keyboard_brightness = buffer.str();
         keyboard_brightness.erase(keyboard_brightness.find_last_not_of(" \n\r\t") + 1);
 
+        brightness.close(); // Explicitly close file
         return keyboard_brightness;
     }
     else

@@ -9,6 +9,8 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <cstring>
 
 #include "fan.hpp"
 #include "keyboard.hpp"
@@ -81,17 +83,34 @@ void handle_command(const std::string &command_str, int client_socket)
 	{
         std::string fan_num;
         ss >> fan_num;
-		response = get_fan_speed(fan_num);
+        // Validate fan number
+        if (fan_num != "1" && fan_num != "2") {
+            response = "ERROR: Invalid fan number. Must be 1 or 2";
+        } else {
+		    response = get_fan_speed(fan_num);
+        }
 	}
 	else if (command == "SET_FAN_SPEED")
 	{
 		std::string fan_num;
         std::string speed;
         ss >> fan_num >> speed;
-        if (!fan_num.empty() && !speed.empty()) {
-		    response = set_fan_speed(fan_num, speed, true, true); // true = allow triggering fan_mode_trigger
-        } else {
+        if (fan_num.empty() || speed.empty()) {
             response = "ERROR: Invalid SET_FAN_SPEED command format";
+        } else if (fan_num != "1" && fan_num != "2") {
+            response = "ERROR: Invalid fan number. Must be 1 or 2";
+        } else {
+            // Validate speed is numeric
+            try {
+                int speed_val = std::stoi(speed);
+                if (speed_val < 0) {
+                    response = "ERROR: Speed must be non-negative";
+                } else {
+		            response = set_fan_speed(fan_num, speed, true, true);
+                }
+            } catch (const std::exception &) {
+                response = "ERROR: Speed must be a valid number";
+            }
         }
 	}
 	else if (command == "SET_FAN_MODE")
@@ -121,10 +140,22 @@ void handle_command(const std::string &command_str, int client_socket)
 	{
 		std::string r, g, b;
         ss >> r >> g >> b;
-        if (!r.empty() && !g.empty() && !b.empty()) {
-		    response = set_keyboard_color(r + " " + g + " " + b);
-        } else {
+        if (r.empty() || g.empty() || b.empty()) {
             response = "ERROR: Invalid SET_KEYBOARD_COLOR command format";
+        } else {
+            // Validate RGB values
+            try {
+                int r_val = std::stoi(r);
+                int g_val = std::stoi(g);
+                int b_val = std::stoi(b);
+                if (r_val < 0 || r_val > 255 || g_val < 0 || g_val > 255 || b_val < 0 || b_val > 255) {
+                    response = "ERROR: RGB values must be between 0 and 255";
+                } else {
+		            response = set_keyboard_color(r + " " + g + " " + b);
+                }
+            } catch (const std::exception &) {
+                response = "ERROR: RGB values must be valid numbers";
+            }
         }
 	}
 	else if (command == "GET_KBD_BRIGHTNESS")
@@ -135,7 +166,21 @@ void handle_command(const std::string &command_str, int client_socket)
 	{
 		std::string value;
         ss >> value;
-		response = set_keyboard_brightness(value);
+        if (value.empty()) {
+            response = "ERROR: Invalid SET_KBD_BRIGHTNESS command format";
+        } else {
+            // Validate brightness value
+            try {
+                int brightness = std::stoi(value);
+                if (brightness < 0 || brightness > 255) {
+                    response = "ERROR: Brightness must be between 0 and 255";
+                } else {
+		            response = set_keyboard_brightness(value);
+                }
+            } catch (const std::exception &) {
+                response = "ERROR: Brightness must be a valid number";
+            }
+        }
 	}
 	else
 		response = "ERROR: Unknown command";
@@ -205,8 +250,8 @@ int main()
                 break;
             }
 
-            if (cmd_len > 1024) { // Basic sanity check
-                std::cerr << "Command too long. Closing connection.\n";
+            if (cmd_len == 0 || cmd_len > 1024) { // Basic sanity check
+                std::cerr << "Invalid command length (" << cmd_len << "). Closing connection.\n";
                 break;
             }
 
