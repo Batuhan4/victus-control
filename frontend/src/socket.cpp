@@ -113,6 +113,12 @@ std::string VictusSocketClient::send_command(const std::string &command)
     }
 
     uint32_t len = command.length();
+    if (len == 0 || len > 1024) { // Sanity check on command length
+        std::cerr << "Invalid command length (" << len << "), closing socket." << std::endl;
+        close_socket();
+        return "ERROR: Invalid command length";
+    }
+    
     if (!send_all(sockfd, &len, sizeof(len)) || !send_all(sockfd, command.c_str(), len)) {
         std::cerr << "Failed to send command, closing socket." << std::endl;
         close_socket();
@@ -126,10 +132,10 @@ std::string VictusSocketClient::send_command(const std::string &command)
         return "ERROR: Failed to read response length";
     }
 
-    if (response_len > 4096) { // Sanity check
-        std::cerr << "Response too long (" << response_len << " bytes), closing socket." << std::endl;
+    if (response_len == 0 || response_len > 4096) { // Sanity check
+        std::cerr << "Invalid response length (" << response_len << " bytes), closing socket." << std::endl;
         close_socket();
-        return "ERROR: Response too long";
+        return "ERROR: Invalid response length";
     }
 
     std::vector<char> buffer(response_len);

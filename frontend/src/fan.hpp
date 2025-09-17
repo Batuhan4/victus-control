@@ -30,7 +30,7 @@ private:
     void set_fan_rpm(int level);
 
     // Signal handlers
-	static void on_mode_changed(GtkComboBox *widget, gpointer data);
+	static void on_mode_changed(GtkDropDown *widget, gpointer data);
 	static void on_speed_slider_changed(GtkRange *range, gpointer data);
 
 	std::shared_ptr<VictusSocketClient> socket_client;

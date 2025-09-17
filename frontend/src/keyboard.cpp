@@ -12,19 +12,19 @@ VictusKeyboardControl::VictusKeyboardControl(std::shared_ptr<VictusSocketClient>
 	gtk_widget_set_margin_end(keyboard_page, 20);
 
 	toggle_button = gtk_button_new_with_label("Keyboard: OFF");
-	color_chooser = GTK_COLOR_CHOOSER(gtk_color_chooser_widget_new());
+	color_button = gtk_color_button_new();
 	apply_button = gtk_button_new_with_label("Apply");
 	current_color_label = GTK_LABEL(gtk_label_new("Current Color: #000000"));
 	current_state_label = GTK_LABEL(gtk_label_new("Current State: OFF"));
 
 	gtk_box_append(GTK_BOX(keyboard_page), toggle_button);
-	gtk_box_append(GTK_BOX(keyboard_page), GTK_WIDGET(color_chooser));
+	gtk_box_append(GTK_BOX(keyboard_page), color_button);
 	gtk_box_append(GTK_BOX(keyboard_page), apply_button);
 	gtk_box_append(GTK_BOX(keyboard_page), GTK_WIDGET(current_color_label));
 	gtk_box_append(GTK_BOX(keyboard_page), GTK_WIDGET(current_state_label));
 
 	g_signal_connect(toggle_button, "clicked", G_CALLBACK(on_toggle_clicked), this);
-	g_signal_connect(color_chooser, "color-activated", G_CALLBACK(on_color_activated), this);
+	g_signal_connect(color_button, "color-set", G_CALLBACK(on_color_set), this);
 	g_signal_connect(apply_button, "clicked", G_CALLBACK(on_apply_clicked), this);
 
 	update_keyboard_state_from_device();
@@ -87,12 +87,12 @@ void VictusKeyboardControl::on_toggle_clicked(GtkWidget *widget, gpointer data)
 	self->update_keyboard_state(self->keyboard_enabled);
 }
 
-void VictusKeyboardControl::on_color_activated(GtkColorChooser *widget, gpointer data)
+void VictusKeyboardControl::on_color_set(GtkColorButton *widget, gpointer data)
 {
 	VictusKeyboardControl *self = static_cast<VictusKeyboardControl *>(data);
 
 	GdkRGBA color;
-	gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(self->color_chooser), &color);
+	gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(widget), &color);
 
 	self->update_keyboard_color(color);
 }
@@ -102,7 +102,7 @@ void VictusKeyboardControl::on_apply_clicked(GtkWidget *widget, gpointer data)
 	VictusKeyboardControl *self = static_cast<VictusKeyboardControl *>(data);
 
 	GdkRGBA color;
-	gtk_color_chooser_get_rgba(self->color_chooser, &color);
+	gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(self->color_button), &color);
 
 	self->update_keyboard_color(color);
 
