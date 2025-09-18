@@ -11,6 +11,7 @@ public:
 	GtkWidget *fan_page;
 
 	VictusFanControl(std::shared_ptr<VictusSocketClient> client);
+	~VictusFanControl();
 
 	GtkWidget *get_page();
 
@@ -34,6 +35,7 @@ private:
 	static void on_speed_slider_changed(GtkRange *range, gpointer data);
 
 	std::shared_ptr<VictusSocketClient> socket_client;
+	guint update_timer_id;
 };
 
 #endif // FAN_HPP
