@@ -29,9 +29,13 @@ private:
 	void update_ui_from_system_state();
     void set_fan_rpm(int level);
 
+    // Debounce state
+    guint debounce_timeout_id = 0;
+
     // Signal handlers
 	static void on_mode_changed(GtkComboBox *widget, gpointer data);
 	static void on_speed_slider_changed(GtkRange *range, gpointer data);
+    static gboolean on_debounce_timeout(gpointer data);
 
 	std::shared_ptr<VictusSocketClient> socket_client;
 };

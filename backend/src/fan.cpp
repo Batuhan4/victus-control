@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <exception>
 #include <cmath>
+#include <sys/wait.h>
 
 #include "fan.hpp"
 #include "util.hpp"
@@ -78,6 +79,16 @@ static std::string to_lower_copy(const std::string &input)
         return static_cast<char>(std::tolower(c));
     });
     return lowered;
+}
+
+static void rtrim_inplace(std::string &s)
+{
+    size_t pos = s.find_last_not_of(" \n\r\t");
+    if (pos == std::string::npos) {
+        s.clear();
+    } else {
+        s.erase(pos + 1);
+    }
 }
 
 static std::optional<std::string> find_thermal_zone_by_type(const std::vector<std::string> &hints)
@@ -720,8 +731,7 @@ std::string get_fan_mode()
 			std::stringstream buffer;
 			buffer << fan_ctrl.rdbuf();
 			std::string fan_mode = buffer.str();
-
-			fan_mode.erase(fan_mode.find_last_not_of(" \n\r\t") + 1);
+			rtrim_inplace(fan_mode);
 
 			if (fan_mode == "2")
 				return "AUTO";
@@ -792,8 +802,7 @@ std::string get_fan_speed(const std::string &fan_num)
 			buffer << fan_file.rdbuf();
 
 			std::string fan_speed = buffer.str();
-
-			fan_speed.erase(fan_speed.find_last_not_of(" \n\r\t") + 1);
+			rtrim_inplace(fan_speed);
 
 			return fan_speed;
 		}
@@ -856,7 +865,7 @@ std::string set_fan_speed(const std::string &fan_num, const std::string &speed, 
         fan_last_apply[index] = std::chrono::steady_clock::now();
         apply_lock.unlock();
 
-        if (result == 0)
+        if (result != -1 && WIFEXITED(result) && WEXITSTATUS(result) == 0)
         {
             // Only trigger fan_mode_trigger if requested and not already reapplying
             if (trigger_mode && !is_reapplying.load(std::memory_order_acquire) && get_fan_mode() == "MANUAL") {
@@ -866,7 +875,8 @@ std::string set_fan_speed(const std::string &fan_num, const std::string &speed, 
         }
         else
         {
-            std::cerr << "Failed to execute set-fan-speed.sh for fan " << fan_num << ". Exit code: " << WEXITSTATUS(result) << std::endl;
+            int exit_code = (result == -1) ? -1 : (WIFEXITED(result) ? WEXITSTATUS(result) : -2);
+            std::cerr << "Failed to execute set-fan-speed.sh for fan " << fan_num << ". Exit code: " << exit_code << std::endl;
             return "ERROR: Failed to set fan speed";
         }
     }
@@ -887,7 +897,7 @@ std::string set_fan_speed(const std::string &fan_num, const std::string &speed, 
 
     int result = system(command.c_str());
 
-    if (result == 0)
+    if (result != -1 && WIFEXITED(result) && WEXITSTATUS(result) == 0)
     {
         // Only trigger fan_mode_trigger if requested and not already reapplying
         if (trigger_mode && !is_reapplying.load(std::memory_order_acquire) && get_fan_mode() == "MANUAL") {
@@ -897,7 +907,8 @@ std::string set_fan_speed(const std::string &fan_num, const std::string &speed, 
     }
     else
     {
-        std::cerr << "Failed to execute set-fan-speed.sh for fan " << fan_num << ". Exit code: " << WEXITSTATUS(result) << std::endl;
+        int exit_code = (result == -1) ? -1 : (WIFEXITED(result) ? WEXITSTATUS(result) : -2);
+        std::cerr << "Failed to execute set-fan-speed.sh for fan " << fan_num << ". Exit code: " << exit_code << std::endl;
         return "ERROR: Failed to set fan speed";
     }
 }

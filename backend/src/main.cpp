@@ -3,12 +3,15 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <string>
 #include <vector>
 #include <cstdint>
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <cstring>
 
 #include "fan.hpp"
 #include "keyboard.hpp"
@@ -162,6 +165,19 @@ int main()
 	memset(&server_addr, 0, sizeof(server_addr));
 	server_addr.sun_family = AF_UNIX;
 	strncpy(server_addr.sun_path, SOCKET_PATH, sizeof(server_addr.sun_path) - 1);
+	server_addr.sun_path[sizeof(server_addr.sun_path) - 1] = '\0';
+
+	// Ensure socket directory exists before bind
+	struct stat st;
+	if (stat(SOCKET_DIR, &st) == -1)
+	{
+		if (mkdir(SOCKET_DIR, 0770) < 0 && errno != EEXIST)
+		{
+			std::cerr << "Failed to create socket directory '" << SOCKET_DIR << "': " << strerror(errno) << std::endl;
+			close(server_socket);
+			return 1;
+		}
+	}
 
 	if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
 	{

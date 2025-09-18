@@ -182,6 +182,31 @@ void VictusFanControl::on_mode_changed(GtkComboBox *widget, gpointer data)
 void VictusFanControl::on_speed_slider_changed(GtkRange *range, gpointer data)
 {
     VictusFanControl *self = static_cast<VictusFanControl*>(data);
-    int level = static_cast<int>(gtk_range_get_value(range));
+    // Debounce rapid changes: wait 400ms after last change
+    if (self->debounce_timeout_id != 0) {
+        g_source_remove(self->debounce_timeout_id);
+        self->debounce_timeout_id = 0;
+    }
+    self->debounce_timeout_id = g_timeout_add(400, on_debounce_timeout, self);
+}
+
+gboolean VictusFanControl::on_debounce_timeout(gpointer data)
+{
+    VictusFanControl *self = static_cast<VictusFanControl*>(data);
+    self->debounce_timeout_id = 0;
+
+    // Only apply in MANUAL mode
+    gchar *mode = gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(self->mode_selector));
+    bool is_manual = false;
+    if (mode) {
+        is_manual = (std::string(mode) == "MANUAL");
+        g_free(mode);
+    }
+    if (!is_manual) {
+        return G_SOURCE_REMOVE;
+    }
+
+    int level = static_cast<int>(gtk_range_get_value(GTK_RANGE(self->speed_slider)));
     self->set_fan_rpm(level);
+    return G_SOURCE_REMOVE;
 }

@@ -13,7 +13,8 @@ std::string get_keyboard_color()
 		buffer << rgb.rdbuf();
 
 		std::string rgb_mode = buffer.str();
-		rgb_mode.erase(rgb_mode.find_last_not_of(" \n\r\t") + 1);
+		size_t pos = rgb_mode.find_last_not_of(" \n\r\t");
+		if (pos == std::string::npos) rgb_mode.clear(); else rgb_mode.erase(pos + 1);
 
 		return rgb_mode;
 	}
@@ -48,7 +49,8 @@ std::string get_keyboard_brightness()
         buffer << brightness.rdbuf();
 
         std::string keyboard_brightness = buffer.str();
-        keyboard_brightness.erase(keyboard_brightness.find_last_not_of(" \n\r\t") + 1);
+        size_t pos = keyboard_brightness.find_last_not_of(" \n\r\t");
+        if (pos == std::string::npos) keyboard_brightness.clear(); else keyboard_brightness.erase(pos + 1);
 
         return keyboard_brightness;
     }

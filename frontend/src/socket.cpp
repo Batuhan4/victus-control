@@ -78,6 +78,7 @@ bool VictusSocketClient::connect_to_server()
 	memset(&addr, 0, sizeof(addr));
 	addr.sun_family = AF_UNIX;
 	strncpy(addr.sun_path, socket_path.c_str(), sizeof(addr.sun_path) - 1);
+	addr.sun_path[sizeof(addr.sun_path) - 1] = '\0';
 
 	// Try to connect with a timeout
 	if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) == -1)
