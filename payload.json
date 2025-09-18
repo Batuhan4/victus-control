@@ -1,0 +1,7 @@
+{
+  "title": "Harden backend socket, trims, exit; frontend debounce + icon",
+  "head": "fix/hardening-socket-trim-exit-about-debounce",
+  "base": "",
+  "body": "Backend: create socket dir; add errno/cstring; safe rtrim; robust system exit. Frontend: use icon name; debounce slider; ensure sun_path null-terminated.",
+  "maintainer_can_modify": true
+}
