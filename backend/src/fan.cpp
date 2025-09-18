@@ -19,6 +19,9 @@
 
 #include "fan.hpp"
 #include "util.hpp"
+#include "config.hpp"
+#include "logger.hpp"
+#include "validation.hpp"
 
 static std::atomic<int> fan_thread_generation(0);
 static std::atomic<bool> is_reapplying(false);
@@ -42,6 +45,9 @@ static std::atomic<bool> cpu_sensor_warned(false);
 static std::atomic<bool> gpu_sensor_warned(false);
 static std::atomic<bool> gpu_usage_warned(false);
 
+// Global shutdown flag for clean thread termination
+static std::atomic<bool> global_shutdown(false);
+
 struct CpuSampleTimes {
     unsigned long long idle;
     unsigned long long total;
@@ -49,15 +55,10 @@ struct CpuSampleTimes {
 static std::mutex cpu_usage_mutex;
 static std::optional<CpuSampleTimes> previous_cpu_times;
 
-static constexpr int kBetterAutoMinRpm = 2000;
-static constexpr std::array<int, 2> kBetterAutoMaxFallback = {5800, 6100};
-static constexpr int kBetterAutoSteps = 8;
-static constexpr std::chrono::seconds kBetterAutoTick{2};
-static constexpr std::chrono::seconds kBetterAutoReapply{90};
-static constexpr std::chrono::seconds kFanApplyGap{10};
+// Constants moved to config.hpp
 
 static std::array<std::once_flag, 2> fan_max_once;
-static std::array<int, 2> fan_max_cache = kBetterAutoMaxFallback;
+static std::array<int, 2> fan_max_cache = Config::BETTER_AUTO_MAX_FALLBACK;
 static std::mutex fan_apply_mutex;
 static std::array<std::chrono::steady_clock::time_point, 2> fan_last_apply = {
     std::chrono::steady_clock::time_point::min(),
@@ -388,7 +389,7 @@ static int fan_max_for_index(size_t index)
                 }
             }
         }
-        fan_max_cache[index] = kBetterAutoMaxFallback[index];
+        fan_max_cache[index] = Config::BETTER_AUTO_MAX_FALLBACK[index];
     });
     return fan_max_cache[index];
 }
@@ -410,21 +411,21 @@ static int level_from_thresholds(double value, const std::array<double, 7> &thre
             ++level;
         }
     }
-    return std::clamp(level, 1, kBetterAutoSteps);
+        return std::clamp(level, 1, Config::BETTER_AUTO_STEPS);
 }
 
 static int rpm_for_level_for_fan(int level, size_t fan_index)
 {
-    level = std::clamp(level, 1, kBetterAutoSteps);
-    int max_rpm = fan_max_for_index(fan_index);
-    if (kBetterAutoSteps <= 1) {
+        level = std::clamp(level, 1, Config::BETTER_AUTO_STEPS);
+        int max_rpm = fan_max_for_index(fan_index);
+        if (Config::BETTER_AUTO_STEPS <= 1) {
         return max_rpm;
     }
 
-    double step = static_cast<double>(max_rpm - kBetterAutoMinRpm) / static_cast<double>(kBetterAutoSteps - 1);
-    double value = static_cast<double>(kBetterAutoMinRpm) + static_cast<double>(level - 1) * step;
-    int rpm = static_cast<int>(std::round(value));
-    rpm = std::clamp(rpm, kBetterAutoMinRpm, max_rpm);
+            double step = static_cast<double>(max_rpm - Config::BETTER_AUTO_MIN_RPM) / static_cast<double>(Config::BETTER_AUTO_STEPS - 1);
+            double value = static_cast<double>(Config::BETTER_AUTO_MIN_RPM) + static_cast<double>(level - 1) * step;
+            int rpm = static_cast<int>(std::round(value));
+            rpm = std::clamp(rpm, Config::BETTER_AUTO_MIN_RPM, max_rpm);
     return rpm;
 }
 
@@ -435,8 +436,8 @@ static std::array<int, 2> rpm_for_level(int level)
 
 static int level_from_snapshot(const ThermalSnapshot &snapshot, int previous_level)
 {
-    const std::array<double, 7> temp_thresholds = {50.0, 60.0, 70.0, 75.0, 80.0, 85.0, 90.0};
-    const std::array<double, 7> usage_thresholds = {20.0, 35.0, 50.0, 65.0, 75.0, 85.0, 95.0};
+        const auto& temp_thresholds = Config::TEMP_THRESHOLDS;
+        const auto& usage_thresholds = Config::USAGE_THRESHOLDS;
 
     double hottest = 0.0;
     bool have_temp = false;
@@ -465,7 +466,7 @@ static int level_from_snapshot(const ThermalSnapshot &snapshot, int previous_lev
     int usage_level = have_usage ? level_from_thresholds(usage_pct, usage_thresholds) : 1;
 
     int target_level = std::max(temp_level, usage_level);
-    target_level = std::clamp(target_level, 1, kBetterAutoSteps);
+        target_level = std::clamp(target_level, 1, Config::BETTER_AUTO_STEPS);
 
     if (target_level < previous_level) {
         // Drop at most one step per sample to avoid oscillations
@@ -513,12 +514,12 @@ static std::string write_hw_fan_mode(const std::string &mode)
 
 static void better_auto_worker()
 {
-    std::cout << "better-auto: control loop started" << std::endl;
+    LOG_INFO("better-auto: control loop started");
     int current_level = 3;
     auto last_apply = std::chrono::steady_clock::time_point::min();
     better_auto_last_manual_assert = std::chrono::steady_clock::time_point::min();
 
-    while (better_auto_running.load(std::memory_order_acquire)) {
+    while (better_auto_running.load(std::memory_order_acquire) && !global_shutdown.load(std::memory_order_acquire)) {
         ThermalSnapshot snapshot = collect_snapshot();
         int target_level = level_from_snapshot(snapshot, current_level);
         auto now = std::chrono::steady_clock::now();
@@ -535,7 +536,7 @@ static void better_auto_worker()
 
         bool need_apply = (target_level != current_level) ||
                           (last_apply == std::chrono::steady_clock::time_point::min()) ||
-                          (now - last_apply >= kBetterAutoReapply);
+                          (now - last_apply >= Config::BETTER_AUTO_REAPPLY);
 
         if (need_apply) {
             auto rpms = rpm_for_level(target_level);
@@ -547,7 +548,7 @@ static void better_auto_worker()
                 std::cerr << "better-auto: failed to set fan 1 speed: " << result1 << std::endl;
             }
 
-            const int gap_seconds = static_cast<int>(kFanApplyGap.count());
+            const int gap_seconds = static_cast<int>(Config::FAN_APPLY_GAP.count());
             for (int i = 0; i < gap_seconds; ++i) {
                 if (!better_auto_running.load(std::memory_order_acquire)) {
                     break;
@@ -568,7 +569,7 @@ static void better_auto_worker()
             last_apply = std::chrono::steady_clock::now();
         }
 
-        const int tick_seconds = static_cast<int>(kBetterAutoTick.count());
+        const int tick_seconds = static_cast<int>(Config::BETTER_AUTO_TICK.count());
         for (int i = 0; i < tick_seconds; ++i) {
             if (!better_auto_running.load(std::memory_order_acquire)) {
                 break;
@@ -577,7 +578,7 @@ static void better_auto_worker()
         }
     }
 
-    std::cout << "better-auto: control loop stopped" << std::endl;
+    LOG_INFO("better-auto: control loop stopped");
 }
 
 static void stop_better_auto()
@@ -678,11 +679,11 @@ void fan_mode_trigger(const std::string mode) {
 	if (mode == "AUTO" || mode == "BETTER_AUTO") return;
 
     std::thread([mode, gen = fan_thread_generation.load()]() {
-        while (fan_thread_generation == gen) {
+        while (fan_thread_generation == gen && !global_shutdown.load(std::memory_order_acquire)) {
             // Reapply the fan mode directly via hwmon
             auto result = write_hw_fan_mode(mode);
             if (result != "OK") {
-                std::cerr << "fan_mode_trigger: failed to assert mode " << mode << ": " << result << std::endl;
+                LOG_ERROR("fan_mode_trigger: failed to assert mode " + mode + ": " + result);
             }
 
             // Reapply fan settings if in manual mode
@@ -692,10 +693,11 @@ void fan_mode_trigger(const std::string mode) {
 
             // Wait for the interval (90 seconds)
             for (int i = 0; i < 90; ++i) {
-                if (fan_thread_generation != gen) return;
+                if (fan_thread_generation != gen || global_shutdown.load(std::memory_order_acquire)) return;
                 std::this_thread::sleep_for(std::chrono::seconds(1));
             }
         }
+        LOG_DEBUG("fan_mode_trigger thread exiting for mode " + mode);
     }).detach();
 }
 
@@ -812,92 +814,108 @@ std::string get_fan_speed(const std::string &fan_num)
 
 std::string set_fan_speed(const std::string &fan_num, const std::string &speed, bool trigger_mode, bool update_cache)
 {
-    int parsed_speed = 0;
-    bool parsed = false;
-    try {
-        parsed_speed = std::stoi(speed);
-        parsed = true;
-    } catch (const std::exception &) {
-        parsed = false;
+    // Validate inputs first
+    if (!Validation::validate_fan_number(fan_num)) {
+        LOG_WARNING("Invalid fan number in set_fan_speed: " + fan_num);
+        return "ERROR: Invalid fan number";
+    }
+    
+    int parsed_speed;
+    if (!Validation::validate_fan_speed(speed, parsed_speed)) {
+        LOG_WARNING("Invalid fan speed in set_fan_speed: " + speed);
+        return "ERROR: Invalid fan speed value";
     }
 
-    if (parsed) {
-        size_t index = (fan_num == "2") ? 1 : 0;
-        int clamped_speed = clamp_to_fan_limits(index, parsed_speed);
-        if (clamped_speed != parsed_speed) {
-            std::cout << "set_fan_speed: clamped fan " << fan_num << " target from " << parsed_speed << " to " << clamped_speed << std::endl;
-        }
-        std::string clamped_str = std::to_string(clamped_speed);
-        if (update_cache) {
-            std::lock_guard<std::mutex> lock(fan_state_mutex);
-            if (fan_num == "1") {
-                last_fan1_speed = clamped_str;
-            } else if (fan_num == "2") {
-                last_fan2_speed = clamped_str;
-            }
-        }
-
-        // Update command string if we parsed successfully
-        std::string command = "sudo /usr/bin/set-fan-speed.sh " + fan_num + " " + clamped_str;
-
-        std::unique_lock<std::mutex> apply_lock(fan_apply_mutex);
-        auto now = std::chrono::steady_clock::now();
-        if (index == 1 && fan_last_apply[0] != std::chrono::steady_clock::time_point::min()) {
-            auto elapsed = now - fan_last_apply[0];
-            if (elapsed < kFanApplyGap) {
-                auto wait_duration = kFanApplyGap - elapsed;
-                apply_lock.unlock();
-                std::this_thread::sleep_for(wait_duration);
-                apply_lock.lock();
-            }
-        }
-
-        int result = system(command.c_str());
-        fan_last_apply[index] = std::chrono::steady_clock::now();
-        apply_lock.unlock();
-
-        if (result == 0)
-        {
-            // Only trigger fan_mode_trigger if requested and not already reapplying
-            if (trigger_mode && !is_reapplying.load(std::memory_order_acquire) && get_fan_mode() == "MANUAL") {
-                fan_mode_trigger("MANUAL");
-            }
-            return "OK";
-        }
-        else
-        {
-            std::cerr << "Failed to execute set-fan-speed.sh for fan " << fan_num << ". Exit code: " << WEXITSTATUS(result) << std::endl;
-            return "ERROR: Failed to set fan speed";
-        }
+    size_t index = (fan_num == "2") ? 1 : 0;
+    int clamped_speed = clamp_to_fan_limits(index, parsed_speed);
+    if (clamped_speed != parsed_speed) {
+        LOG_INFO("Clamped fan " + fan_num + " target from " + std::to_string(parsed_speed) + " to " + std::to_string(clamped_speed));
     }
-
-    // If parsing failed, fall back to original behavior without clamping
+    
+    std::string clamped_str = std::to_string(clamped_speed);
+    
     if (update_cache) {
         std::lock_guard<std::mutex> lock(fan_state_mutex);
         if (fan_num == "1") {
-            last_fan1_speed = speed;
+            last_fan1_speed = clamped_str;
         } else if (fan_num == "2") {
-            last_fan2_speed = speed;
+            last_fan2_speed = clamped_str;
         }
     }
 
-    // Construct the command to call the external script with sudo
-    // The script must be in a location like /usr/bin
-    std::string command = "sudo /usr/bin/set-fan-speed.sh " + fan_num + " " + speed;
-
-    int result = system(command.c_str());
-
-    if (result == 0)
-    {
-        // Only trigger fan_mode_trigger if requested and not already reapplying
-        if (trigger_mode && !is_reapplying.load(std::memory_order_acquire) && get_fan_mode() == "MANUAL") {
-            fan_mode_trigger("MANUAL");
+    // Apply rate limiting
+    std::unique_lock<std::mutex> apply_lock(fan_apply_mutex);
+    auto now = std::chrono::steady_clock::now();
+    if (index == 1 && fan_last_apply[0] != std::chrono::steady_clock::time_point::min()) {
+        auto elapsed = now - fan_last_apply[0];
+        if (elapsed < Config::FAN_APPLY_GAP) {
+            auto wait_duration = Config::FAN_APPLY_GAP - elapsed;
+            apply_lock.unlock();
+            std::this_thread::sleep_for(wait_duration);
+            apply_lock.lock();
         }
-        return "OK";
     }
-    else
-    {
-        std::cerr << "Failed to execute set-fan-speed.sh for fan " << fan_num << ". Exit code: " << WEXITSTATUS(result) << std::endl;
+
+    // Direct sysfs write instead of shell script
+    std::string hwmon_path = find_hwmon_directory("/sys/devices/platform/hp-wmi/hwmon");
+    if (hwmon_path.empty()) {
+        LOG_ERROR("Hwmon directory not found for fan control");
+        return "ERROR: Hwmon directory not found";
+    }
+
+    // Ensure manual mode is set before changing fan speed
+    std::string pwm_enable_path = hwmon_path + "/pwm1_enable";
+    std::ofstream pwm_enable(pwm_enable_path);
+    if (!pwm_enable) {
+        LOG_ERROR("Failed to open PWM enable file: " + pwm_enable_path);
+        return "ERROR: Failed to set manual mode";
+    }
+    pwm_enable << "1";
+    pwm_enable.close();
+
+    // Write the fan speed
+    std::string target_file = hwmon_path + "/fan" + fan_num + "_target";
+    std::ofstream fan_target(target_file);
+    if (!fan_target) {
+        LOG_ERROR("Failed to open fan target file: " + target_file);
         return "ERROR: Failed to set fan speed";
     }
+    
+    fan_target << clamped_str;
+    fan_target.flush();
+    
+    if (fan_target.fail()) {
+        LOG_ERROR("Failed to write to fan target file: " + target_file);
+        return "ERROR: Failed to write fan speed";
+    }
+    
+    fan_target.close();
+    fan_last_apply[index] = std::chrono::steady_clock::now();
+    apply_lock.unlock();
+
+    // Only trigger fan_mode_trigger if requested and not already reapplying
+    if (trigger_mode && !is_reapplying.load(std::memory_order_acquire) && get_fan_mode() == "MANUAL") {
+        fan_mode_trigger("MANUAL");
+    }
+    
+    LOG_DEBUG("Successfully set fan " + fan_num + " speed to " + clamped_str);
+    return "OK";
+}
+
+void fan_cleanup() {
+    LOG_INFO("Starting fan subsystem cleanup");
+    
+    // Signal all threads to shutdown
+    global_shutdown.store(true, std::memory_order_release);
+    
+    // Stop better auto if running
+    stop_better_auto();
+    
+    // Increment generation to stop any fan_mode_trigger threads
+    fan_thread_generation++;
+    
+    // Give threads time to exit gracefully
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
+    LOG_INFO("Fan subsystem cleanup completed");
 }

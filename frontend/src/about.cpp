@@ -11,12 +11,26 @@ VictusAbout::VictusAbout()
 	gtk_about_dialog_set_copyright(GTK_ABOUT_DIALOG(about_dialog), "betelqeyza");
 	gtk_about_dialog_set_comments(GTK_ABOUT_DIALOG(about_dialog), "nothing :P");
 
-	GdkTexture *texture = gdk_texture_new_from_filename("victus-icon.svg", NULL);
-
-	if (texture != NULL)
-	{
-		gtk_about_dialog_set_logo(GTK_ABOUT_DIALOG(about_dialog), GDK_PAINTABLE(texture));
-		g_object_unref(texture);
+	// Try to load icon from standard locations
+	const char* icon_paths[] = {
+		"/usr/share/icons/hicolor/48x48/apps/victus-icon.svg",
+		"/usr/local/share/icons/hicolor/48x48/apps/victus-icon.svg",
+		"./victus-icon.svg",
+		nullptr
+	};
+	
+	GdkTexture *texture = nullptr;
+	for (const char** path = icon_paths; *path != nullptr; path++) {
+		GError *error = nullptr;
+		texture = gdk_texture_new_from_filename(*path, &error);
+		if (texture != nullptr) {
+			gtk_about_dialog_set_logo(GTK_ABOUT_DIALOG(about_dialog), GDK_PAINTABLE(texture));
+			g_object_unref(texture);
+			break;
+		}
+		if (error) {
+			g_error_free(error);
+		}
 	}
 
 	g_signal_connect(about_dialog, "close-request", G_CALLBACK(+[](GtkWidget *dialog, gpointer)

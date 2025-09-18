@@ -64,15 +64,13 @@ else
     echo "Warning: Could not determine the original user. Please add your user to the 'victus' group manually with: sudo usermod -aG victus \$USER"
 fi
 
-# --- 2.5. Configure Sudoers and Scripts ---
-echo "--> Installing helper script and configuring sudoers..."
-# Install the fan control script to /usr/bin
-install -m 0755 backend/src/set-fan-speed.sh /usr/bin/set-fan-speed.sh
-# Remove any old sudoers file that may exist
+# --- 2.5. Clean up old configuration files ---
+echo "--> Cleaning up old configuration files..."
+# Remove any old sudoers files and scripts
 rm -f /etc/sudoers.d/victus-fan-sudoers
-# Install the new sudoers file
-install -m 0440 victus-control-sudoers /etc/sudoers.d/victus-control-sudoers
-echo "Helper script and sudoers file installed."
+rm -f /etc/sudoers.d/victus-control-sudoers
+rm -f /usr/bin/set-fan-speed.sh
+echo "Old configuration files cleaned up."
 
 # --- 3. Install Patched HP-WMI Kernel Module ---
 echo "--> Installing patched hp-wmi kernel module..."

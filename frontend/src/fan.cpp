@@ -58,10 +58,24 @@ VictusFanControl::VictusFanControl(std::shared_ptr<VictusSocketClient> client) :
     update_fan_speeds();
 
     // Set up a timer to periodically update fan speeds
-    g_timeout_add_seconds(2, [](gpointer data) -> gboolean {
-        static_cast<VictusFanControl*>(data)->update_fan_speeds();
+    update_timer_id = g_timeout_add_seconds(2, [](gpointer data) -> gboolean {
+        VictusFanControl* self = static_cast<VictusFanControl*>(data);
+        
+        // Only update if the page is visible
+        GtkWidget* toplevel = gtk_widget_get_root(self->fan_page);
+        if (toplevel && GTK_IS_WINDOW(toplevel) && gtk_widget_get_visible(toplevel)) {
+            self->update_fan_speeds();
+        }
+        
         return G_SOURCE_CONTINUE;
     }, this);
+}
+
+VictusFanControl::~VictusFanControl()
+{
+    if (update_timer_id > 0) {
+        g_source_remove(update_timer_id);
+    }
 }
 
 GtkWidget* VictusFanControl::get_page()
@@ -155,27 +169,44 @@ void VictusFanControl::on_mode_changed(GtkComboBox *widget, gpointer data)
 
     if (mode) {
         std::string mode_str(mode);
-        
-        // Send the mode command and wait for it to complete.
-        auto result = self->socket_client->send_command_async(SET_FAN_MODE, mode_str).get();
-
-        if (result == "OK") {
-            // If we are entering manual mode, now we can safely set the fan speed.
-            if (mode_str == "MANUAL") {
-                int level = static_cast<int>(gtk_range_get_value(GTK_RANGE(self->speed_slider)));
-                self->set_fan_rpm(level);
-            } else if (mode_str == "BETTER_AUTO") {
-                gtk_widget_set_sensitive(self->speed_slider, FALSE);
-                gtk_widget_set_sensitive(self->slider_label, FALSE);
-            }
-        } else {
-            std::cerr << "Failed to set fan mode: " << result << std::endl;
-        }
-        
         g_free(mode);
         
-        // After all commands are sent, update the UI to reflect the final state.
-        self->update_ui_from_system_state();
+        // Disable controls while operation is in progress
+        gtk_widget_set_sensitive(GTK_WIDGET(widget), FALSE);
+        
+        // Execute mode change asynchronously
+        std::thread([self, mode_str, widget]() {
+            auto result = self->socket_client->send_command_async(SET_FAN_MODE, mode_str).get();
+
+            // Schedule UI update in main thread
+            g_idle_add([](gpointer data) -> gboolean {
+                auto* args = static_cast<std::pair<VictusFanControl*, GtkComboBox*>*>(data);
+                VictusFanControl* self = args->first;
+                GtkComboBox* widget = args->second;
+                
+                // Re-enable the combo box
+                gtk_widget_set_sensitive(GTK_WIDGET(widget), TRUE);
+                
+                // Update UI state
+                self->update_ui_from_system_state();
+                
+                delete args;
+                return G_SOURCE_REMOVE;
+            }, new std::pair<VictusFanControl*, GtkComboBox*>(self, widget));
+
+            if (result == "OK" && mode_str == "MANUAL") {
+                // Small delay to ensure mode is set
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                
+                // Get slider value and set fan RPM
+                g_idle_add([](gpointer data) -> gboolean {
+                    VictusFanControl* self = static_cast<VictusFanControl*>(data);
+                    int level = static_cast<int>(gtk_range_get_value(GTK_RANGE(self->speed_slider)));
+                    self->set_fan_rpm(level);
+                    return G_SOURCE_REMOVE;
+                }, self);
+            }
+        }).detach();
     }
 }
 

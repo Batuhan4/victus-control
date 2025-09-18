@@ -8,6 +8,8 @@
 #include <cerrno>
 #include <future>
 #include <mutex>
+#include <thread>
+#include <chrono>
 
 // Helper function to reliably send a block of data
 bool send_all(int socket, const void *buffer, size_t length) {
@@ -92,6 +94,32 @@ bool VictusSocketClient::connect_to_server()
 	return true;
 }
 
+bool VictusSocketClient::ensure_connected()
+{
+    if (sockfd != -1) {
+        // Check if socket is still valid
+        int error = 0;
+        socklen_t len = sizeof(error);
+        if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &error, &len) == 0 && error == 0) {
+            return true;
+        }
+        // Socket is in error state, close it
+        close_socket();
+    }
+    
+    // Try to connect up to 3 times with delay
+    for (int i = 0; i < 3; i++) {
+        if (connect_to_server()) {
+            return true;
+        }
+        if (i < 2) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+    }
+    
+    return false;
+}
+
 void VictusSocketClient::close_socket()
 {
 	if (sockfd != -1) {
@@ -106,10 +134,8 @@ std::string VictusSocketClient::send_command(const std::string &command)
 {
     std::lock_guard<std::mutex> lock(socket_mutex);
 
-	if (sockfd == -1) {
-        if (!connect_to_server()) {
-		    return "ERROR: No server connection";
-        }
+	if (!ensure_connected()) {
+		return "ERROR: No server connection";
     }
 
     uint32_t len = command.length();

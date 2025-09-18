@@ -32,6 +32,7 @@ private:
 	std::string socket_path;
 
 	bool connect_to_server();
+	bool ensure_connected();
 	void close_socket();
 
 	int sockfd;
