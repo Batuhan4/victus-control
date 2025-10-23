@@ -3,6 +3,7 @@
 #include <fstream>
 #include <sstream>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <thread>
 #include <chrono>
 #include <atomic>
@@ -13,6 +14,7 @@
 #include <array>
 #include <vector>
 #include <cstring>
+#include <cerrno>
 #include <algorithm>
 #include <exception>
 #include <cmath>
@@ -27,6 +29,7 @@ static std::optional<std::string> last_fan1_speed;
 static std::optional<std::string> last_fan2_speed;
 static std::mutex mode_mutex;
 static std::string requested_mode = "AUTO";
+static std::atomic<bool> fan_mode_requires_root(false);
 
 static std::atomic<bool> better_auto_running(false);
 static std::thread better_auto_thread;
@@ -481,36 +484,101 @@ static void stop_better_auto();
 static std::string start_better_auto();
 static void better_auto_worker();
 
+static bool encode_pwm_mode(const std::string &mode, std::string &encoded)
+{
+	if (mode == "AUTO") {
+		encoded = "2";
+		return true;
+	}
+	if (mode == "MANUAL") {
+		encoded = "1";
+		return true;
+	}
+	if (mode == "MAX") {
+		encoded = "0";
+		return true;
+	}
+	if (mode == "BETTER_AUTO") {
+		encoded = "1";
+		return true;
+	}
+
+	return false;
+}
+
+static std::string apply_fan_mode_with_sudo(const std::string &mode)
+{
+	std::string command = "sudo /usr/bin/set-fan-mode.sh " + mode;
+	int result = system(command.c_str());
+
+	if (result == 0) {
+		return "OK";
+	}
+
+	if (result == -1) {
+		std::cerr << "set-fan-mode.sh invocation failed: " << strerror(errno) << std::endl;
+		return "ERROR: Unable to set fan mode";
+	}
+
+	if (WIFEXITED(result)) {
+		std::cerr << "set-fan-mode.sh failed with exit code: " << WEXITSTATUS(result) << std::endl;
+	} else {
+		std::cerr << "set-fan-mode.sh terminated abnormally when setting mode " << mode << std::endl;
+	}
+
+	return "ERROR: Unable to set fan mode";
+}
+
 static std::string write_hw_fan_mode(const std::string &mode)
 {
 	std::string hwmon_path = find_hwmon_directory("/sys/devices/platform/hp-wmi/hwmon");
 
 	if (!hwmon_path.empty())
 	{
-		std::ofstream fan_ctrl(hwmon_path + "/pwm1_enable");
-
-		if (fan_ctrl)
-		{
-			if (mode == "AUTO")
-				fan_ctrl << "2";
-			else if (mode == "MANUAL")
-				fan_ctrl << "1";
-			else if (mode == "MAX")
-				fan_ctrl << "0";
-			else
-				return "ERROR: Invalid fan mode: " + mode;
-
-			fan_ctrl.flush();
-			if (fan_ctrl.fail()) {
-				return "ERROR: Failed to write fan mode";
-			}
-			return "OK";
+		bool use_sudo = fan_mode_requires_root.load(std::memory_order_acquire);
+		std::string encoded_mode;
+		if (!encode_pwm_mode(mode, encoded_mode)) {
+			return "ERROR: Invalid fan mode: " + mode;
 		}
-		else
-			return "ERROR: Unable to set fan mode";
+
+		if (!use_sudo) {
+			std::string control_path = hwmon_path + "/pwm1_enable";
+			errno = 0;
+			std::ofstream fan_ctrl(control_path);
+
+			if (fan_ctrl) {
+				fan_ctrl << encoded_mode;
+				fan_ctrl.flush();
+				if (!fan_ctrl.fail()) {
+					return "OK";
+				}
+
+				int write_errno = errno;
+				std::cerr << "Failed to write fan mode via sysfs: " << strerror(write_errno) << std::endl;
+				if (write_errno != EACCES && write_errno != EPERM) {
+					return "ERROR: Failed to write fan mode";
+				}
+				fan_mode_requires_root.store(true, std::memory_order_release);
+				use_sudo = true;
+			} else {
+				int open_errno = errno;
+				std::cerr << "Failed to open fan mode control (" << control_path << "): " << strerror(open_errno) << std::endl;
+				if (open_errno != EACCES && open_errno != EPERM) {
+					return "ERROR: Unable to set fan mode";
+				}
+				fan_mode_requires_root.store(true, std::memory_order_release);
+				use_sudo = true;
+			}
+		}
+
+		if (use_sudo) {
+			return apply_fan_mode_with_sudo(mode);
+		}
+
+		return "ERROR: Unable to set fan mode";
 	}
-	else
-		return "ERROR: Hwmon directory not found";
+
+	return "ERROR: Hwmon directory not found";
 }
 
 static void better_auto_worker()

@@ -57,6 +57,19 @@ pacman -S --needed --noconfirm "${packages[@]}"
 # --- 2. Create Users and Groups ---
 echo "--> Creating secure users and groups..."
 
+# Ensure the victus group exists as a system group for udev ACLs
+if ! getent group victus > /dev/null; then
+    groupadd --system victus
+    echo "Group 'victus' created."
+else
+    echo "Group 'victus' already exists."
+    group_gid=$(getent group victus | cut -d: -f3)
+    if (( group_gid >= 1000 )); then
+        echo "Warning: Group 'victus' (GID ${group_gid}) is not a system group; udev rules may ignore it."
+        echo "         Consider recreating it as a system group (sudo groupdel victus; sudo groupadd --system victus)."
+    fi
+fi
+
 # Create the victus-backend group if it doesn't exist
 if ! getent group victus-backend > /dev/null; then
     groupadd --system victus-backend
@@ -81,14 +94,6 @@ else
     echo "User 'victus-backend' is already in the 'victus' group."
 fi
 
-# Create the victus user group if it doesn't exist
-if ! getent group victus > /dev/null; then
-    groupadd victus
-    echo "Group 'victus' created."
-else
-    echo "Group 'victus' already exists."
-fi
-
 # Add the user who invoked sudo to the 'victus' group
 # SUDO_USER is set by sudo to the username of the original user.
 if [ -n "$SUDO_USER" ]; then
@@ -104,8 +109,9 @@ fi
 
 # --- 2.5. Configure Sudoers and Scripts ---
 echo "--> Installing helper script and configuring sudoers..."
-# Install the fan control script to /usr/bin
+# Install the fan control scripts to /usr/bin
 install -m 0755 backend/src/set-fan-speed.sh /usr/bin/set-fan-speed.sh
+install -m 0755 backend/src/set-fan-mode.sh /usr/bin/set-fan-mode.sh
 # Remove any old sudoers file that may exist
 rm -f /etc/sudoers.d/victus-fan-sudoers
 # Install the new sudoers file

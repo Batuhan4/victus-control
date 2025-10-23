@@ -1,2 +1,2 @@
-# Allow the victus-backend user to run the set-fan-speed.sh script as root.
-victus-backend ALL=(root) NOPASSWD: /usr/bin/set-fan-speed.sh
+# Allow the victus-backend user to run the fan control helper scripts as root.
+victus-backend ALL=(root) NOPASSWD: /usr/bin/set-fan-speed.sh, /usr/bin/set-fan-mode.sh
