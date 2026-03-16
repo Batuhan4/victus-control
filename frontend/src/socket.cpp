@@ -38,7 +38,7 @@ bool read_all(int socket, void *buffer, size_t length) {
 }
 
 
-VictusSocketClient::VictusSocketClient(const std::string &path) : socket_path(path), sockfd(-1) 
+VictusSocketClient::VictusSocketClient(const std::string &path) : socket_path(path), sockfd(-1)
 {
   command_prefix_map = {
       {GET_FAN_SPEED, "GET_FAN_SPEED"},

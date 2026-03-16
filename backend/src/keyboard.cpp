@@ -1,3 +1,5 @@
+#include <array>
+#include <cstdio>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -7,189 +9,255 @@
 
 #include "keyboard.hpp"
 
-// Helper: Check if Omen 4-zone driver files exist
-static bool omen_4zone_exists() {
+namespace {
+
+constexpr int kFourZoneCount = 4;
+constexpr const char *kFourZoneZone0Path =
+    "/sys/devices/platform/hp-wmi/rgb_zones/zone00";
+constexpr const char *kFourZoneZonePathPrefix =
+    "/sys/devices/platform/hp-wmi/rgb_zones/zone0";
+constexpr const char *kSingleZoneColorPath =
+    "/sys/class/leds/hp::kbd_backlight/multi_intensity";
+constexpr const char *kSingleZoneBrightnessPath =
+    "/sys/class/leds/hp::kbd_backlight/brightness";
+constexpr const char *kRgbZoneWriterPath = "/usr/bin/set-rgb-zone.sh";
+
+bool omen_4zone_exists() {
   struct stat buffer;
-  return (stat("/sys/devices/platform/hp-wmi/rgb_zones/zone00", &buffer) == 0);
+  return stat(kFourZoneZone0Path, &buffer) == 0;
 }
+
+std::string trim_trailing_whitespace(std::string value) {
+  size_t last = value.find_last_not_of(" \n\r\t");
+  if (last == std::string::npos)
+    return "";
+
+  value.erase(last + 1);
+  return value;
+}
+
+std::string fourzone_zone_path(int zone) {
+  return std::string(kFourZoneZonePathPrefix) + std::to_string(zone);
+}
+
+bool parse_hex_color(const std::string &hex, std::array<int, 3> *rgb) {
+  if (hex.size() < 6)
+    return false;
+
+  try {
+    (*rgb)[0] = std::stoi(hex.substr(0, 2), nullptr, 16);
+    (*rgb)[1] = std::stoi(hex.substr(2, 2), nullptr, 16);
+    (*rgb)[2] = std::stoi(hex.substr(4, 2), nullptr, 16);
+  } catch (...) {
+    return false;
+  }
+
+  return true;
+}
+
+bool parse_rgb_triplet(const std::string &color, std::array<int, 3> *rgb) {
+  std::stringstream ss(color);
+  int red;
+  int green;
+  int blue;
+  char extra;
+
+  if (!(ss >> red >> green >> blue))
+    return false;
+
+  if (ss >> extra)
+    return false;
+
+  if (red < 0 || red > 255 || green < 0 || green > 255 || blue < 0 ||
+      blue > 255)
+    return false;
+
+  *rgb = {red, green, blue};
+  return true;
+}
+
+std::string hex_to_rgb_string(const std::string &hex) {
+  std::array<int, 3> rgb;
+
+  if (!parse_hex_color(hex, &rgb))
+    return "255 255 255";
+
+  return std::to_string(rgb[0]) + " " + std::to_string(rgb[1]) + " " +
+         std::to_string(rgb[2]);
+}
+
+std::string rgb_triplet_to_hex(const std::string &color) {
+  std::array<int, 3> rgb;
+
+  if (!parse_rgb_triplet(color, &rgb))
+    return "";
+
+  std::ostringstream hex;
+  hex << std::uppercase << std::setfill('0') << std::hex << std::setw(2)
+      << rgb[0] << std::setw(2) << rgb[1] << std::setw(2) << rgb[2];
+  return hex.str();
+}
+
+std::string read_text_file(const std::string &path) {
+  std::ifstream file(path);
+  if (!file)
+    return "";
+
+  std::stringstream buffer;
+  buffer << file.rdbuf();
+  return trim_trailing_whitespace(buffer.str());
+}
+
+std::string write_rgb_zone_with_helper(int zone, const std::string &hex_color) {
+  std::string cmd = "sudo ";
+  cmd += kRgbZoneWriterPath;
+  cmd += " ";
+  cmd += std::to_string(zone);
+  cmd += " ";
+  cmd += hex_color;
+  cmd += " 2>&1";
+
+  FILE *pipe = popen(cmd.c_str(), "r");
+  if (!pipe)
+    return "ERROR: Failed to execute helper script";
+
+  char buffer[256];
+  std::string result;
+  while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
+    result += buffer;
+
+  int ret = pclose(pipe);
+  if (ret == 0)
+    return "OK";
+
+  result = trim_trailing_whitespace(result);
+  if (result.empty())
+    result = "Failed to set zone color";
+
+  return "ERROR: " + result;
+}
+
+std::string fourzone_brightness_value() {
+  bool any_enabled = false;
+
+  for (int zone = 0; zone < kFourZoneCount; zone++) {
+    std::array<int, 3> rgb;
+    std::string hex = read_text_file(fourzone_zone_path(zone));
+    if (hex.empty() || !parse_hex_color(hex, &rgb))
+      return "ERROR: Failed to read zone color";
+
+    if (rgb[0] != 0 || rgb[1] != 0 || rgb[2] != 0)
+      any_enabled = true;
+  }
+
+  return any_enabled ? "255" : "0";
+}
+
+} // namespace
 
 std::string get_keyboard_type() {
-  if (omen_4zone_exists()) {
-    return "FOUR_ZONE";
-  } else {
-    return "SINGLE_ZONE";
-  }
-}
-
-// Helper: Convert Hex string (e.g. "FF0000") to "255 0 0" for the Frontend
-static std::string hex_to_rgb_string(const std::string &hex) {
-  if (hex.length() < 6)
-    return "255 255 255";
-  int r, g, b;
-  std::stringstream ss;
-  ss << std::hex << hex.substr(0, 2);
-  ss >> r;
-  ss.clear();
-  ss << std::hex << hex.substr(2, 2);
-  ss >> g;
-  ss.clear();
-  ss << std::hex << hex.substr(4, 2);
-  ss >> b;
-  return std::to_string(r) + " " + std::to_string(g) + " " + std::to_string(b);
+  return omen_4zone_exists() ? "FOUR_ZONE" : "SINGLE_ZONE";
 }
 
 std::string get_keyboard_color() {
   if (omen_4zone_exists()) {
-    // Read Zone 0 as the "Global" color representative
-    std::ifstream zone("/sys/devices/platform/hp-wmi/rgb_zones/zone00");
-    if (zone) {
-      std::string hex_val;
-      zone >> hex_val;
+    std::string hex_val = read_text_file(kFourZoneZone0Path);
+    if (!hex_val.empty())
       return hex_to_rgb_string(hex_val);
-    }
   }
 
-  // Fallback: Original Victus Single-Zone Logic
-  std::ifstream rgb("/sys/class/leds/hp::kbd_backlight/multi_intensity");
+  std::ifstream rgb(kSingleZoneColorPath);
   if (rgb) {
-    std::stringstream buffer;
-    buffer << rgb.rdbuf();
-    std::string rgb_mode = buffer.str();
-    // Clean up whitespace
-    size_t last = rgb_mode.find_last_not_of(" \n\r\t");
-    if (last != std::string::npos)
-      rgb_mode.erase(last + 1);
+    std::string rgb_mode = read_text_file(kSingleZoneColorPath);
     return rgb_mode;
-  } else
-    return "ERROR: RGB File not found";
+  }
+
+  return "ERROR: RGB File not found";
 }
 
 std::string get_keyboard_zone_color(int zone) {
-  if (zone < 0 || zone > 3) {
+  if (zone < 0 || zone >= kFourZoneCount)
     return "ERROR: Invalid zone";
-  }
 
   if (omen_4zone_exists()) {
-    std::string path =
-        "/sys/devices/platform/hp-wmi/rgb_zones/zone0" + std::to_string(zone);
-    std::ifstream zone_file(path);
-    if (zone_file) {
-      std::string hex_val;
-      zone_file >> hex_val;
+    std::string hex_val = read_text_file(fourzone_zone_path(zone));
+    if (!hex_val.empty())
       return hex_to_rgb_string(hex_val);
-    }
+
     return "ERROR: Zone file not found";
   }
 
-  // For single-zone, just return the global color
   return get_keyboard_color();
 }
 
 std::string set_keyboard_color(const std::string &color) {
   if (omen_4zone_exists()) {
-    // Frontend sends "R G B" (e.g. "255 0 0")
-    // We must convert to HEX "FF0000" and write to ALL 4 zones
-    std::stringstream ss(color);
-    int r, g, b;
-    ss >> r >> g >> b;
+    std::string hex_val = rgb_triplet_to_hex(color);
+    if (hex_val.empty())
+      return "ERROR: Invalid RGB color";
 
-    std::stringstream hex_ss;
-    hex_ss << std::uppercase << std::setfill('0') << std::setw(2) << std::hex
-           << r << std::setw(2) << g << std::setw(2) << b;
-
-    std::string hex_val = hex_ss.str();
-
-    // Write to zone00 through zone03
-    for (int i = 0; i < 4; i++) {
-      std::string path =
-          "/sys/devices/platform/hp-wmi/rgb_zones/zone0" + std::to_string(i);
-      std::ofstream zone(path);
-      if (zone) {
-        zone << hex_val;
-      }
+    for (int zone = 0; zone < kFourZoneCount; zone++) {
+      std::string result = write_rgb_zone_with_helper(zone, hex_val);
+      if (result != "OK")
+        return result;
     }
+
     return "OK";
   }
 
-  // Fallback: Original Victus Single-Zone Logic
-  std::ofstream rgb("/sys/class/leds/hp::kbd_backlight/multi_intensity");
+  std::ofstream rgb(kSingleZoneColorPath);
   if (rgb) {
     rgb << color;
     rgb.flush();
-    if (rgb.fail()) {
+    if (rgb.fail())
       return "ERROR: Failed to write RGB color";
-    }
+
     return "OK";
-  } else
-    return "ERROR: RGB File not found";
+  }
+
+  return "ERROR: RGB File not found";
 }
 
 std::string set_keyboard_zone_color(int zone, const std::string &color) {
-  if (zone < 0 || zone > 3) {
+  if (zone < 0 || zone >= kFourZoneCount)
     return "ERROR: Invalid zone";
-  }
 
   if (omen_4zone_exists()) {
-    std::stringstream ss(color);
-    int r, g, b;
-    ss >> r >> g >> b;
+    std::string hex_val = rgb_triplet_to_hex(color);
+    if (hex_val.empty())
+      return "ERROR: Invalid RGB color";
 
-    std::stringstream hex_ss;
-    hex_ss << std::uppercase << std::setfill('0') << std::setw(2) << std::hex
-           << r << std::setw(2) << g << std::setw(2) << b;
-    std::string hex_val = hex_ss.str();
-
-    // Use sudo helper script to write with elevated privileges
-    std::string cmd = "sudo /usr/bin/set-rgb-zone.sh " + std::to_string(zone) +
-                      " " + hex_val + " 2>&1";
-    FILE *pipe = popen(cmd.c_str(), "r");
-    if (!pipe) {
-      return "ERROR: Failed to execute helper script";
-    }
-
-    char buffer[256];
-    std::string result;
-    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-      result += buffer;
-    }
-    int ret = pclose(pipe);
-
-    if (ret == 0) {
-      return "OK";
-    }
-    return "ERROR: " +
-           (result.empty() ? std::string("Failed to set zone color") : result);
+    return write_rgb_zone_with_helper(zone, hex_val);
   }
 
-  // Fallback to setting global color
   return set_keyboard_color(color);
 }
 
 std::string get_keyboard_brightness() {
-  // Omen 4-zone brightness is often controlled by the color itself (black =
-  // off) But we check the standard path just in case
-  std::ifstream brightness("/sys/class/leds/hp::kbd_backlight/brightness");
+  if (omen_4zone_exists())
+    return fourzone_brightness_value();
+
+  std::ifstream brightness(kSingleZoneBrightnessPath);
   if (brightness) {
-    std::stringstream buffer;
-    buffer << brightness.rdbuf();
-    std::string val = buffer.str();
-    size_t last = val.find_last_not_of(" \n\r\t");
-    if (last != std::string::npos)
-      val.erase(last + 1);
-    return val;
+    return read_text_file(kSingleZoneBrightnessPath);
   }
-  return "255"; // Fake it for Omen if file missing, assuming always on
+
+  return "ERROR: Keyboard Brightness File not found";
 }
 
-std::string set_keyboard_brightness(const std::string &value)
-{
-  std::ofstream brightness("/sys/class/leds/hp::kbd_backlight/brightness");
-    if (brightness)
-    {
+std::string set_keyboard_brightness(const std::string &value) {
+  if (omen_4zone_exists())
+    return "OK";
+
+  std::ofstream brightness(kSingleZoneBrightnessPath);
+  if (brightness) {
     brightness << value;
+    brightness.flush();
+    if (brightness.fail())
+      return "ERROR: Failed to write keyboard brightness";
+
     return "OK";
   }
-  // If file doesn't exist (Omen 4-zone often handles brightness via color),
-  // we just return OK so the UI doesn't complain.
-  return "OK";
+
+  return "ERROR: Keyboard Brightness File not found";
 }

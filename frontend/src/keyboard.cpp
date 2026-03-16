@@ -8,6 +8,77 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+namespace {
+
+constexpr int kFourZoneCount = 4;
+constexpr int kKeyboardRows = 4;
+constexpr int kKeyboardColumns = 16;
+constexpr int kKeyWidth = 20;
+constexpr int kKeyHeight = 20;
+constexpr int kKeySpacing = 3;
+
+bool parse_rgb_triplet(const std::string &rgb_string, GdkRGBA *color) {
+  std::stringstream ss(rgb_string);
+  int red;
+  int green;
+  int blue;
+  char extra;
+
+  if (!(ss >> red >> green >> blue))
+    return false;
+
+  if (ss >> extra)
+    return false;
+
+  if (red < 0 || red > 255 || green < 0 || green > 255 || blue < 0 ||
+      blue > 255)
+    return false;
+
+  *color = {red / 255.0, green / 255.0, blue / 255.0, 1.0};
+  return true;
+}
+
+bool parse_hex_color(const std::string &hex, GdkRGBA *color) {
+  if (hex.size() < 6)
+    return false;
+
+  try {
+    int red = std::stoi(hex.substr(0, 2), nullptr, 16);
+    int green = std::stoi(hex.substr(2, 2), nullptr, 16);
+    int blue = std::stoi(hex.substr(4, 2), nullptr, 16);
+    *color = {red / 255.0, green / 255.0, blue / 255.0, 1.0};
+  } catch (...) {
+    return false;
+  }
+
+  return true;
+}
+
+bool is_color_off(const GdkRGBA &color) {
+  return color.red <= 0.01 && color.green <= 0.01 && color.blue <= 0.01;
+}
+
+bool any_zone_has_color(const GdkRGBA zone_colors[kFourZoneCount]) {
+  for (int i = 0; i < kFourZoneCount; i++) {
+    if (!is_color_off(zone_colors[i]))
+      return true;
+  }
+
+  return false;
+}
+
+void get_keyboard_visual_origin(GtkWidget *widget, int *start_x, int *start_y) {
+  const int total_width = kKeyboardColumns * (kKeyWidth + kKeySpacing) - kKeySpacing;
+  const int total_height = kKeyboardRows * (kKeyHeight + kKeySpacing) - kKeySpacing;
+  const int width = gtk_widget_get_width(widget);
+  const int height = gtk_widget_get_height(widget);
+
+  *start_x = (width - total_width) / 2;
+  *start_y = (height - total_height) / 2;
+}
+
+} // namespace
+
 VictusKeyboardControl::VictusKeyboardControl(
     std::shared_ptr<VictusSocketClient> client)
     : socket_client(client) {
@@ -19,13 +90,13 @@ VictusKeyboardControl::VictusKeyboardControl(
 
   // Initialize zone colors to white (will be overwritten after detecting
   // keyboard type)
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < kFourZoneCount; i++) {
     zone_colors[i] = {1.0, 1.0, 1.0, 1.0};
     zone_choosers[i] = nullptr;
     saved_zone_colors[i] = {1.0, 1.0, 1.0, 1.0};
   }
 
-  keyboard_enabled = true; // Explicit initialization
+  keyboard_enabled = false;
   hovered_zone = -1;       // No zone hovered initially
 
   // Detect keyboard type first
@@ -36,22 +107,19 @@ VictusKeyboardControl::VictusKeyboardControl(
 
   // Read initial zone colors from device
   if (keyboard_type == "FOUR_ZONE") {
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < kFourZoneCount; i++) {
       auto color_future = socket_client->send_command_async(
           GET_KEYBOARD_ZONE_COLOR, std::to_string(i));
       std::string color_str = color_future.get();
 
-      // Parse "R G B" format
-      if (color_str.find("ERROR") == std::string::npos) {
-        std::stringstream ss(color_str);
-        int r, g, b;
-        ss >> r >> g >> b;
-        zone_colors[i] = {r / 255.0, g / 255.0, b / 255.0, 1.0};
-      }
+      if (color_str.find("ERROR") == std::string::npos)
+        parse_rgb_triplet(color_str, &zone_colors[i]);
     }
-    // Initialize saved colors with initial colors for toggle restore
-    for (int i = 0; i < 4; i++) {
-      saved_zone_colors[i] = zone_colors[i];
+
+    keyboard_enabled = any_zone_has_color(zone_colors);
+    if (keyboard_enabled) {
+      for (int i = 0; i < kFourZoneCount; i++)
+        saved_zone_colors[i] = zone_colors[i];
     }
   }
 
@@ -172,26 +240,23 @@ void VictusKeyboardControl::apply_preset(const std::string &preset_name) {
   auto &preset = presets[preset_name];
 
   // Convert hex to GdkRGBA and apply to all zones
-  for (int i = 0; i < 4; i++) {
-    std::string hex = preset[i];
-    int r, g, b;
-    std::stringstream ss;
-    ss << std::hex << hex.substr(0, 2);
-    ss >> r;
-    ss.clear();
-    ss << std::hex << hex.substr(2, 2);
-    ss >> g;
-    ss.clear();
-    ss << std::hex << hex.substr(4, 2);
-    ss >> b;
+  for (int i = 0; i < kFourZoneCount; i++) {
+    GdkRGBA color;
+    if (!parse_hex_color(preset[i], &color))
+      continue;
 
-    zone_colors[i] = {r / 255.0, g / 255.0, b / 255.0, 1.0};
+    if (keyboard_type == "FOUR_ZONE" && !keyboard_enabled) {
+      saved_zone_colors[i] = color;
+      continue;
+    }
 
-    // Apply immediately
+    zone_colors[i] = color;
     apply_zone_color_immediately(i);
   }
 
   update_keyboard_visual();
+  if (keyboard_enabled)
+    update_current_color_label(this);
 }
 
 void VictusKeyboardControl::apply_zone_color_immediately(int zone) {
@@ -296,6 +361,7 @@ void VictusKeyboardControl::build_ui_for_keyboard_type() {
   // Status labels (common for both types)
   current_color_label = GTK_LABEL(gtk_label_new("Current Color: #000000"));
   current_state_label = GTK_LABEL(gtk_label_new("Current State: OFF"));
+  gtk_box_append(GTK_BOX(keyboard_page), GTK_WIDGET(current_color_label));
   gtk_box_append(GTK_BOX(keyboard_page), GTK_WIDGET(current_state_label));
 }
 
@@ -328,23 +394,18 @@ void VictusKeyboardControl::draw_keyboard_visual(GtkDrawingArea *area,
 
   // No background - let the window theme show through
 
-  // Define keyboard layout - simplified representation
-  int key_width = 20;
-  int key_height = 20;
-  int spacing = 3;
-
   // Center the keyboard within the drawing area
-  int total_width = 16 * (key_width + spacing) - spacing;
-  int total_height = 4 * (key_height + spacing) - spacing;
+  int total_width = kKeyboardColumns * (kKeyWidth + kKeySpacing) - kKeySpacing;
+  int total_height = kKeyboardRows * (kKeyHeight + kKeySpacing) - kKeySpacing;
   int start_x = (width - total_width) / 2;
   int start_y = (height - total_height) / 2;
 
   if (self->keyboard_type == "FOUR_ZONE") {
     // Draw keyboard row by row with hover highlights
-    for (int row = 0; row < 4; row++) {
-      for (int col = 0; col < 16; col++) {
-        int x = start_x + col * (key_width + spacing);
-        int y = start_y + row * (key_height + spacing);
+    for (int row = 0; row < kKeyboardRows; row++) {
+      for (int col = 0; col < kKeyboardColumns; col++) {
+        int x = start_x + col * (kKeyWidth + kKeySpacing);
+        int y = start_y + row * (kKeyHeight + kKeySpacing);
 
         // Determine zone for this key
         int zone = get_zone_at_position(row, col);
@@ -353,7 +414,7 @@ void VictusKeyboardControl::draw_keyboard_visual(GtkDrawingArea *area,
         cairo_set_source_rgb(cr, self->zone_colors[zone].red,
                              self->zone_colors[zone].green,
                              self->zone_colors[zone].blue);
-        cairo_rectangle(cr, x, y, key_width, key_height);
+        cairo_rectangle(cr, x, y, kKeyWidth, kKeyHeight);
         cairo_fill(cr);
 
         // Draw smart contrast border if this zone is hovered
@@ -369,7 +430,7 @@ void VictusKeyboardControl::draw_keyboard_visual(GtkDrawingArea *area,
             cairo_set_source_rgb(cr, 1.0, 1.0, 1.0); // White
           }
           cairo_set_line_width(cr, 2);
-          cairo_rectangle(cr, x, y, key_width, key_height);
+          cairo_rectangle(cr, x, y, kKeyWidth, kKeyHeight);
           cairo_stroke(cr);
         }
       }
@@ -385,11 +446,11 @@ void VictusKeyboardControl::draw_keyboard_visual(GtkDrawingArea *area,
     }
 
     cairo_set_source_rgb(cr, color.red, color.green, color.blue);
-    for (int row = 0; row < 4; row++) {
-      for (int col = 0; col < 16; col++) {
-        int x = start_x + col * (key_width + spacing);
-        int y = start_y + row * (key_height + spacing);
-        cairo_rectangle(cr, x, y, key_width, key_height);
+    for (int row = 0; row < kKeyboardRows; row++) {
+      for (int col = 0; col < kKeyboardColumns; col++) {
+        int x = start_x + col * (kKeyWidth + kKeySpacing);
+        int y = start_y + row * (kKeyHeight + kKeySpacing);
+        cairo_rectangle(cr, x, y, kKeyWidth, kKeyHeight);
         cairo_fill(cr);
       }
     }
@@ -402,11 +463,9 @@ VictusKeyboardControl::on_keyboard_motion(GtkEventControllerMotion *controller,
   VictusKeyboardControl *self = static_cast<VictusKeyboardControl *>(data);
 
   // Calculate which zone the mouse is over
-  int key_width = 20;
-  int key_height = 20;
-  int spacing = 3;
-  int start_x = 10;
-  int start_y = 10;
+  int start_x;
+  int start_y;
+  get_keyboard_visual_origin(self->keyboard_visual, &start_x, &start_y);
 
   // Check if within keyboard bounds
   if (x < start_x || y < start_y) {
@@ -418,10 +477,10 @@ VictusKeyboardControl::on_keyboard_motion(GtkEventControllerMotion *controller,
   }
 
   // Calculate row and column
-  int col = (int)((x - start_x) / (key_width + spacing));
-  int row = (int)((y - start_y) / (key_height + spacing));
+  int col = (int)((x - start_x) / (kKeyWidth + kKeySpacing));
+  int row = (int)((y - start_y) / (kKeyHeight + kKeySpacing));
 
-  if (row >= 0 && row < 4 && col >= 0 && col < 16) {
+  if (row >= 0 && row < kKeyboardRows && col >= 0 && col < kKeyboardColumns) {
     int zone = get_zone_at_position(row, col);
     if (zone != self->hovered_zone) {
       self->hovered_zone = zone;
@@ -443,16 +502,14 @@ void VictusKeyboardControl::on_keyboard_click(GtkGestureClick *gesture,
   VictusKeyboardControl *self = static_cast<VictusKeyboardControl *>(data);
 
   // Calculate which zone was clicked
-  int key_width = 20;
-  int key_height = 20;
-  int spacing = 3;
-  int start_x = 10;
-  int start_y = 10;
+  int start_x;
+  int start_y;
+  get_keyboard_visual_origin(self->keyboard_visual, &start_x, &start_y);
 
-  int col = (int)((x - start_x) / (key_width + spacing));
-  int row = (int)((y - start_y) / (key_height + spacing));
+  int col = (int)((x - start_x) / (kKeyWidth + kKeySpacing));
+  int row = (int)((y - start_y) / (kKeyHeight + kKeySpacing));
 
-  if (row >= 0 && row < 4 && col >= 0 && col < 16) {
+  if (row >= 0 && row < kKeyboardRows && col >= 0 && col < kKeyboardColumns) {
     int zone = get_zone_at_position(row, col);
 
     // Open color chooser dialog for this zone
@@ -461,8 +518,10 @@ void VictusKeyboardControl::on_keyboard_click(GtkGestureClick *gesture,
     GtkWidget *dialog = gtk_color_chooser_dialog_new("Choose Color for Zone",
                                                      GTK_WINDOW(toplevel));
 
-    gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(dialog),
-                               &self->zone_colors[zone]);
+    const GdkRGBA &dialog_color =
+        self->keyboard_enabled ? self->zone_colors[zone]
+                               : self->saved_zone_colors[zone];
+    gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(dialog), &dialog_color);
 
     gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
 
@@ -482,9 +541,16 @@ void VictusKeyboardControl::on_keyboard_click(GtkGestureClick *gesture,
             GdkRGBA color;
             gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(dialog), &color);
 
+            if (!self->keyboard_enabled) {
+              self->saved_zone_colors[zone] = color;
+              gtk_window_destroy(GTK_WINDOW(dialog));
+              return;
+            }
+
             self->zone_colors[zone] = color;
             self->apply_zone_color_immediately(zone);
             self->update_keyboard_visual();
+            VictusKeyboardControl::update_current_color_label(self);
           }
           gtk_window_destroy(GTK_WINDOW(dialog));
         }),
@@ -517,12 +583,7 @@ void VictusKeyboardControl::update_keyboard_state_from_device() {
   std::string szkeyboard_state = keyboard_state.get();
 
   if (szkeyboard_state.find("ERROR") == std::string::npos) {
-    // For single-zone keyboards, use brightness to determine state
-    // For 4-zone keyboards, we control on/off via zone colors, so don't
-    // override
-    if (keyboard_type != "FOUR_ZONE") {
-      keyboard_enabled = (szkeyboard_state == "255");
-    }
+    keyboard_enabled = (szkeyboard_state != "0");
     gtk_button_set_label(GTK_BUTTON(toggle_button),
                          keyboard_enabled ? "Keyboard: ON" : "Keyboard: OFF");
 
@@ -548,6 +609,8 @@ void VictusKeyboardControl::update_keyboard_color(const GdkRGBA &color) {
 
   if (result != "OK")
     std::cerr << "Failed to update keyboard color!: " << result << std::endl;
+  else
+    update_current_color_label(this);
 }
 
 void VictusKeyboardControl::on_toggle_clicked(GtkWidget *widget,
@@ -565,29 +628,21 @@ void VictusKeyboardControl::on_toggle_clicked(GtkWidget *widget,
       std::cout << "Turning OFF - saving colors and setting to black"
                 << std::endl;
       // Save current colors before turning off (only if not already black)
-      bool has_color = false;
-      for (int i = 0; i < 4; i++) {
-        if (self->zone_colors[i].red > 0.01 ||
-            self->zone_colors[i].green > 0.01 ||
-            self->zone_colors[i].blue > 0.01) {
-          has_color = true;
-          break;
-        }
-      }
+      bool has_color = any_zone_has_color(self->zone_colors);
       if (has_color) {
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < kFourZoneCount; i++) {
           self->saved_zone_colors[i] = self->zone_colors[i];
         }
       }
       // Set all zones to black
-      for (int i = 0; i < 4; i++) {
+      for (int i = 0; i < kFourZoneCount; i++) {
         self->zone_colors[i] = {0.0f, 0.0f, 0.0f, 1.0f};
         self->apply_zone_color_immediately(i);
       }
     } else {
       // Restore saved colors
       std::cout << "Restoring saved colors..." << std::endl;
-      for (int i = 0; i < 4; i++) {
+      for (int i = 0; i < kFourZoneCount; i++) {
         std::cout << "Zone " << i << ": R=" << self->saved_zone_colors[i].red
                   << " G=" << self->saved_zone_colors[i].green
                   << " B=" << self->saved_zone_colors[i].blue << std::endl;
@@ -599,6 +654,7 @@ void VictusKeyboardControl::on_toggle_clicked(GtkWidget *widget,
   }
 
   self->update_keyboard_state(self->keyboard_enabled);
+  VictusKeyboardControl::update_current_color_label(self);
 }
 
 void VictusKeyboardControl::on_color_activated(GtkColorChooser *widget,
@@ -646,7 +702,7 @@ void VictusKeyboardControl::save_current_preset(
   presets[preset_name] = {"", "", "", ""};
 
   // Convert zone colors to hex
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < kFourZoneCount; i++) {
     int r = (int)(zone_colors[i].red * 255);
     int g = (int)(zone_colors[i].green * 255);
     int b = (int)(zone_colors[i].blue * 255);
@@ -669,7 +725,7 @@ void VictusKeyboardControl::save_current_preset(
   std::ofstream out(preset_file);
   for (const auto &preset : presets) {
     out << "[" << preset.first << "]\n";
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < kFourZoneCount; i++) {
       out << "zone0" << i << "=" << preset.second[i] << "\n";
     }
     out << "\n";
@@ -698,7 +754,7 @@ void VictusKeyboardControl::remove_preset(const std::string &preset_name) {
   std::ofstream out(preset_file);
   for (const auto &preset : presets) {
     out << "[" << preset.first << "]\n";
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < kFourZoneCount; i++) {
       out << "zone0" << i << "=" << preset.second[i] << "\n";
     }
     out << "\n";
