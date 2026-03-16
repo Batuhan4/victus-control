@@ -3,7 +3,7 @@
 Fan control for HP Victus / Omen laptops on Linux. Stock firmware keeps both fans near **2000 RPM** in AUTO—even while the CPU cooks. victus-control delivers a real “Better Auto” curve, manual RPM control, and keyboard lighting support via a patched `hp-wmi` driver, a privileged backend, and a GTK4 desktop client.
 
 > [!WARNING]
-> Validated primarily on **HP Victus 16-s00xxxx** running CachyOS (Arch). Other models may work but are unverified—monitor thermals carefully.
+> Validated primarily on **HP Victus 16-s00xxxx** running CachyOS (Arch). Other models may work but are unverified—monitor thermals carefully. On **hp victus 15 fa0xxx**, manual fan speeds are not supported, only MAX and AUTO works, better auto can be toggled too, but there is no difference i noticed. 
 
 ## Why victus-control
 - **Better Auto mode** (selectable from the GTK UI or CLI) samples CPU/GPU temps & utilisation every ~2 s, clamps to each fan’s hardware max, and reapplies targets every 90 s with the firmware-required 10 s stagger. Result: fans climb smoothly with load instead of idling at 2000 RPM like HP’s AUTO.
