@@ -112,6 +112,8 @@ echo "--> Installing helper script and configuring sudoers..."
 # Install the fan control scripts to /usr/bin
 install -m 0755 backend/src/set-fan-speed.sh /usr/bin/set-fan-speed.sh
 install -m 0755 backend/src/set-fan-mode.sh /usr/bin/set-fan-mode.sh
+# Install the RGB zone control script to /usr/bin
+install -m 0755 backend/src/set-rgb-zone.sh /usr/bin/set-rgb-zone.sh
 # Remove any old sudoers file that may exist
 rm -f /etc/sudoers.d/victus-fan-sudoers
 # Install the new sudoers file

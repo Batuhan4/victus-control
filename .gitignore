@@ -1,6 +1,7 @@
 /.vscode
 *build/
 pkg/
+.cache/
 
 .gemini/
 gha-creds-*.json
