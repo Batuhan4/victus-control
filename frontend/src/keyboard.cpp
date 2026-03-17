@@ -688,6 +688,19 @@ void VictusKeyboardControl::on_preset_changed(GtkComboBoxText *widget,
 void VictusKeyboardControl::update_current_color_label(gpointer data) {
   VictusKeyboardControl *self = static_cast<VictusKeyboardControl *>(data);
 
+  if (self->keyboard_type == "FOUR_ZONE") {
+    std::string label = "Current Colors:";
+
+    for (int i = 0; i < kFourZoneCount; i++) {
+      auto zone_color = self->socket_client->send_command_async(
+          GET_KEYBOARD_ZONE_COLOR, std::to_string(i));
+      label += " Z" + std::to_string(i) + " " + zone_color.get();
+    }
+
+    gtk_label_set_text(self->current_color_label, label.c_str());
+    return;
+  }
+
   auto current_color =
       self->socket_client->send_command_async(GET_KEYBOARD_COLOR);
   std::string szcurrent_color = current_color.get();
@@ -701,11 +714,16 @@ void VictusKeyboardControl::save_current_preset(
   // Add preset to map
   presets[preset_name] = {"", "", "", ""};
 
+  const GdkRGBA *source_colors = zone_colors;
+  if (keyboard_type == "FOUR_ZONE" && !keyboard_enabled) {
+    source_colors = saved_zone_colors;
+  }
+
   // Convert zone colors to hex
   for (int i = 0; i < kFourZoneCount; i++) {
-    int r = (int)(zone_colors[i].red * 255);
-    int g = (int)(zone_colors[i].green * 255);
-    int b = (int)(zone_colors[i].blue * 255);
+    int r = (int)(source_colors[i].red * 255);
+    int g = (int)(source_colors[i].green * 255);
+    int b = (int)(source_colors[i].blue * 255);
 
     char hex[7];
     snprintf(hex, sizeof(hex), "%02X%02X%02X", r, g, b);
