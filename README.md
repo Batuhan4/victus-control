@@ -11,16 +11,26 @@ Fan control for HP Victus / Omen laptops on Linux. Stock firmware keeps both fan
 - **Keyboard lighting** toggles single-zone RGB colour and brightness.
 
 ## System Requirements
-- 64-bit Linux with `systemd` (Arch-based distros confirmed).
-- Packages installed automatically: `meson`, `ninja`, `gtk4`, `git`, `dkms`, `linux-headers`.
+- 64-bit Linux with `systemd`.
+- Supported installer targets:
+  - Arch-based distros via `pacman`
+  - Fedora via `dnf`
 - Root privileges for installing the DKMS module, sudoers rules, and systemd units.
 
 ## Install & Update
+### Auto-detecting installer
 ```bash
 git clone https://github.com/Batuhan4/victus-control.git
 cd victus-control
 sudo ./install.sh
 ```
+The wrapper routes to `arch-install.sh` or `fedora-install.sh` based on your OS.
+
+### Fedora notes
+- Validated by contributors on `HP Victus 16-S0046NT` with Fedora 43.
+- The Fedora installer now verifies that the patched `hp_wmi` module is actually active before starting the backend.
+- If you recently updated the kernel, reboot first so the running kernel matches the installed `kernel-devel` package.
+
 The installer handles dependency install, user/group creation, DKMS module registration, build + install, and restarts `victus-backend.service`. Log out/in afterwards so your user joins the `victus` group.
 
 ### Background services
@@ -45,7 +55,7 @@ sudo meson install -C build
 - The installer fetches `hp-wmi-fan-and-backlight-control`; it’s git-ignored to keep the repo lean.
 
 ## Troubleshooting
-- **Fans ignore commands**: ensure the DKMS module is loaded (`dkms status | grep hp-wmi-fan-and-backlight-control`, `sudo modprobe hp_wmi`).
+- **Fans ignore commands**: ensure the DKMS module is loaded (`dkms status | grep hp-wmi-fan-and-backlight-control`, `modprobe --show-depends hp_wmi | tail -n1` should point at `/extra/hp-wmi.ko.xz`).
 - **Permission errors**: confirm `victus` group membership (`groups $USER`), then re-run the installer or `sudo usermod -aG victus $USER`.
 - **Socket missing**: `sudo systemd-tmpfiles --create`; `sudo systemctl restart victus-backend.service`.
 - **Uninstall**: `sudo systemctl disable --now victus-backend` and `sudo dkms remove hp-wmi-fan-and-backlight-control/0.0.2 --all`.
