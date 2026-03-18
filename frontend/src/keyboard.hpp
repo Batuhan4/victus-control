@@ -67,7 +67,7 @@ private:
   static void on_keyboard_click(GtkGestureClick *gesture, int n_press, double x,
                                 double y, gpointer data);
   static void on_toggle_clicked(GtkWidget *widget, gpointer data);
-  static void on_color_activated(GtkColorChooser *widget, gpointer data);
+  static void on_apply_color_clicked(GtkWidget *widget, gpointer data);
   static void on_zone_color_changed(GtkColorButton *widget, gpointer data);
   static void on_preset_changed(GtkComboBoxText *widget, gpointer data);
   static void on_save_preset_clicked(GtkWidget *widget, gpointer data);
