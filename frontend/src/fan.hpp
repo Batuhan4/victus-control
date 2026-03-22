@@ -2,6 +2,7 @@
 #define FAN_HPP
 
 #include <gtk/gtk.h>
+#include <atomic>
 #include <string>
 #include "socket.hpp"
 
@@ -34,6 +35,7 @@ private:
 	static void on_speed_slider_changed(GtkRange *range, gpointer data);
 
 	std::shared_ptr<VictusSocketClient> socket_client;
+    std::atomic<unsigned long long> manual_request_generation{0};
 };
 
 #endif // FAN_HPP

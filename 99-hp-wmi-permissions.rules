@@ -1,6 +1,9 @@
 # /etc/udev/rules.d/99-hp-wmi-permissions.rules
 #
-# Grant victus-backend group write access to HP WMI fan control files.
+# Grant victus group write access to HP WMI fan control and keyboard files.
+# Fedora's udev environment is minimal, so use explicit /usr/bin paths.
 
-# Find the hp-wmi device and change ownership of the pwm1_enable file
-ACTION=="add", SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", RUN+="/bin/sh -c 'chgrp victus-backend /sys/devices/platform/hp-wmi/hwmon/hwmon*/pwm1_enable && chmod g+w /sys/devices/platform/hp-wmi/hwmon/hwmon*/pwm1_enable'"
+SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", GROUP="victus", MODE="0664"
+SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", ACTION=="add|change", RUN+="/usr/bin/sh -c '/usr/bin/chgrp victus /sys%p/pwm1_enable /sys%p/fan1_target /sys%p/fan2_target 2>/dev/null; /usr/bin/chmod g+w /sys%p/pwm1_enable /sys%p/fan1_target /sys%p/fan2_target 2>/dev/null'"
+
+SUBSYSTEM=="leds", KERNEL=="hp::kbd_backlight", ACTION=="add|change", RUN+="/usr/bin/sh -c '/usr/bin/chgrp victus /sys%p/brightness /sys%p/multi_intensity 2>/dev/null; /usr/bin/chmod g+w /sys%p/brightness /sys%p/multi_intensity 2>/dev/null'"

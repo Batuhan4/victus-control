@@ -354,8 +354,10 @@ void VictusKeyboardControl::build_ui_for_keyboard_type() {
     color_chooser = GTK_COLOR_CHOOSER(gtk_color_chooser_widget_new());
     gtk_box_append(GTK_BOX(keyboard_page), GTK_WIDGET(color_chooser));
 
-    g_signal_connect(color_chooser, "color-activated",
-                     G_CALLBACK(on_color_activated), this);
+    apply_button = gtk_button_new_with_label("Apply Color");
+    gtk_box_append(GTK_BOX(keyboard_page), apply_button);
+    g_signal_connect(apply_button, "clicked",
+                     G_CALLBACK(on_apply_color_clicked), this);
   }
 
   // Status labels (common for both types)
@@ -657,9 +659,13 @@ void VictusKeyboardControl::on_toggle_clicked(GtkWidget *widget,
   VictusKeyboardControl::update_current_color_label(self);
 }
 
-void VictusKeyboardControl::on_color_activated(GtkColorChooser *widget,
-                                               gpointer data) {
+void VictusKeyboardControl::on_apply_color_clicked(GtkWidget *widget,
+                                                   gpointer data) {
   VictusKeyboardControl *self = static_cast<VictusKeyboardControl *>(data);
+
+  if (!self->color_chooser) {
+    return;
+  }
 
   GdkRGBA color;
   gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(self->color_chooser), &color);

@@ -134,17 +134,37 @@ void VictusFanControl::set_fan_rpm(int level)
 
     std::string fan1_rpm_str = std::to_string(fan1_rpm);
     std::string fan2_rpm_str = std::to_string(fan2_rpm);
+    unsigned long long generation =
+        manual_request_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
 
-    // Launch a detached thread to send commands without freezing the UI
-    std::thread([this, fan1_rpm_str, fan2_rpm_str]() {
-        // Send command for Fan 1 and wait for it to complete
-        socket_client->send_command_async(SET_FAN_SPEED, "1 " + fan1_rpm_str).get();
-        
-        // Wait for 10 seconds
+    // Apply fan 1 immediately, but only let the newest request schedule fan 2
+    // after the firmware-required delay.
+    std::thread([this, fan1_rpm_str, fan2_rpm_str, generation]() {
+        auto fan1_result =
+            socket_client->send_command_async(SET_FAN_SPEED,
+                                              "1 " + fan1_rpm_str)
+                .get();
+        if (fan1_result != "OK") {
+            std::cerr << "Failed to set fan 1 speed: " << fan1_result
+                      << std::endl;
+            return;
+        }
+
         std::this_thread::sleep_for(std::chrono::seconds(10));
-        
-        // Send command for Fan 2 and wait for it to complete
-        socket_client->send_command_async(SET_FAN_SPEED, "2 " + fan2_rpm_str).get();
+
+        if (manual_request_generation.load(std::memory_order_acquire) !=
+            generation) {
+            return;
+        }
+
+        auto fan2_result =
+            socket_client->send_command_async(SET_FAN_SPEED,
+                                              "2 " + fan2_rpm_str)
+                .get();
+        if (fan2_result != "OK") {
+            std::cerr << "Failed to set fan 2 speed: " << fan2_result
+                      << std::endl;
+        }
     }).detach();
 }
 
@@ -182,6 +202,12 @@ void VictusFanControl::on_mode_changed(GtkComboBox *widget, gpointer data)
 void VictusFanControl::on_speed_slider_changed(GtkRange *range, gpointer data)
 {
     VictusFanControl *self = static_cast<VictusFanControl*>(data);
+    const char *active_id =
+        gtk_combo_box_get_active_id(GTK_COMBO_BOX(self->mode_selector));
+    if (!active_id || std::string(active_id) != "MANUAL") {
+        return;
+    }
+
     int level = static_cast<int>(gtk_range_get_value(range));
     self->set_fan_rpm(level);
 }
