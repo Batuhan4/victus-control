@@ -1,0 +1,8 @@
+{
+    "uuid": "victus-control@victus",
+    "name": "Victus Control",
+    "description": "Fan control and keyboard RGB for HP Victus laptops. Integrates with victus-backend service.",
+    "version": 1,
+    "shell-version": ["45", "46", "47", "48", "49"],
+    "url": "https://github.com/Batuhan4/victus-control"
+}

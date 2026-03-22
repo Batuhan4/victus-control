@@ -45,6 +45,30 @@ The installer handles dependency install, user/group creation, DKMS module regis
 - Keyboard tab exposes RGB colour + brightness controls.
 - Backend status: `systemctl status victus-backend.service` (logs via `journalctl -u victus-backend`).
 
+## GNOME Shell Extension
+
+A GNOME Shell extension is available for quick access to fan and keyboard controls from the top panel.
+
+### Features
+- 🌀 **Fan Mode Control**: Switch between AUTO, Better Auto, MANUAL, and MAX
+- 📊 **Manual Fan Speed**: Per-fan sliders with 8 RPM steps (visible in MANUAL mode)
+- ⌨️ **Keyboard RGB**: 10 color presets and brightness slider
+- 🌡️ **Live Status**: Real-time CPU temperature and fan RPM display
+
+### Installation
+```bash
+cd gnome-extension
+chmod +x install.sh
+./install.sh
+gnome-extensions enable victus-control@victus
+```
+
+### Requirements
+- GNOME Shell 45 or later
+- `victus-backend.service` must be running
+
+See [gnome-extension/README.md](gnome-extension/README.md) for detailed documentation.
+
 ## Developing
 ```bash
 meson setup build --prefix=/usr
