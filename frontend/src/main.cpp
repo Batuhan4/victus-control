@@ -125,11 +125,18 @@ int main(int argc, char *argv[])
 			e.what()
 		);
 		gtk_window_set_title(GTK_WINDOW(error_dialog), "Error");
-		g_signal_connect(error_dialog, "response", G_CALLBACK(gtk_window_destroy), nullptr);
-		gtk_widget_set_visible(error_dialog, true);
-		
 		GMainLoop *loop = g_main_loop_new(nullptr, FALSE);
+		g_signal_connect(error_dialog, "response", G_CALLBACK(+[](GtkDialog *dialog, int, gpointer user_data) {
+			g_main_loop_quit(static_cast<GMainLoop *>(user_data));
+			gtk_window_destroy(GTK_WINDOW(dialog));
+		}), loop);
+		g_signal_connect(error_dialog, "close-request", G_CALLBACK(+[](GtkWidget *, gpointer user_data) {
+			g_main_loop_quit(static_cast<GMainLoop *>(user_data));
+			return FALSE;
+		}), loop);
+		gtk_widget_set_visible(error_dialog, true);
 		g_main_loop_run(loop);
+		g_main_loop_unref(loop);
 		return 1;
 	}
 

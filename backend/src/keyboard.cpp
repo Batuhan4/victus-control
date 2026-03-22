@@ -1,13 +1,19 @@
 #include <array>
+#include <cctype>
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <vector>
 
 #include "keyboard.hpp"
+#include "validation.hpp"
 
 namespace {
 
@@ -21,6 +27,7 @@ constexpr const char *kSingleZoneColorPath =
 constexpr const char *kSingleZoneBrightnessPath =
     "/sys/class/leds/hp::kbd_backlight/brightness";
 constexpr const char *kRgbZoneWriterPath = "/usr/bin/set-rgb-zone.sh";
+constexpr const char *kSudoPath = "/usr/bin/sudo";
 
 bool omen_4zone_exists() {
   struct stat buffer;
@@ -41,7 +48,7 @@ std::string fourzone_zone_path(int zone) {
 }
 
 bool parse_hex_color(const std::string &hex, std::array<int, 3> *rgb) {
-  if (hex.size() < 6)
+  if (hex.size() != 6)
     return false;
 
   try {
@@ -52,27 +59,6 @@ bool parse_hex_color(const std::string &hex, std::array<int, 3> *rgb) {
     return false;
   }
 
-  return true;
-}
-
-bool parse_rgb_triplet(const std::string &color, std::array<int, 3> *rgb) {
-  std::stringstream ss(color);
-  int red;
-  int green;
-  int blue;
-  char extra;
-
-  if (!(ss >> red >> green >> blue))
-    return false;
-
-  if (ss >> extra)
-    return false;
-
-  if (red < 0 || red > 255 || green < 0 || green > 255 || blue < 0 ||
-      blue > 255)
-    return false;
-
-  *rgb = {red, green, blue};
   return true;
 }
 
@@ -108,33 +94,62 @@ std::string read_text_file(const std::string &path) {
   return trim_trailing_whitespace(buffer.str());
 }
 
+bool is_valid_hex_color(const std::string &hex) {
+  if (hex.size() != 6)
+    return false;
+
+  for (char ch : hex) {
+    if (!std::isxdigit(static_cast<unsigned char>(ch)))
+      return false;
+  }
+
+  return true;
+}
+
+int run_helper_command(const std::vector<std::string> &args) {
+  if (args.empty()) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  std::vector<char *> argv;
+  argv.reserve(args.size() + 1);
+  for (const auto &arg : args) {
+    argv.push_back(const_cast<char *>(arg.c_str()));
+  }
+  argv.push_back(nullptr);
+
+  pid_t pid = fork();
+  if (pid < 0)
+    return -1;
+
+  if (pid == 0) {
+    execv(args.front().c_str(), argv.data());
+    _exit(127);
+  }
+
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0) {
+    if (errno != EINTR)
+      return -1;
+  }
+
+  return status;
+}
+
 std::string write_rgb_zone_with_helper(int zone, const std::string &hex_color) {
-  std::string cmd = "sudo ";
-  cmd += kRgbZoneWriterPath;
-  cmd += " ";
-  cmd += std::to_string(zone);
-  cmd += " ";
-  cmd += hex_color;
-  cmd += " 2>&1";
+  if (zone < 0 || zone >= kFourZoneCount)
+    return "ERROR: Invalid zone number";
 
-  FILE *pipe = popen(cmd.c_str(), "r");
-  if (!pipe)
-    return "ERROR: Failed to execute helper script";
+  if (!is_valid_hex_color(hex_color))
+    return "ERROR: Invalid hex color value";
 
-  char buffer[256];
-  std::string result;
-  while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
-    result += buffer;
-
-  int ret = pclose(pipe);
-  if (ret == 0)
+  int status = run_helper_command(
+      {kSudoPath, kRgbZoneWriterPath, std::to_string(zone), hex_color});
+  if (status == 0)
     return "OK";
 
-  result = trim_trailing_whitespace(result);
-  if (result.empty())
-    result = "Failed to set zone color";
-
-  return "ERROR: " + result;
+  return "ERROR: Failed to set zone color";
 }
 
 std::string fourzone_brightness_value() {
@@ -166,9 +181,8 @@ std::string get_keyboard_color() {
       return hex_to_rgb_string(hex_val);
   }
 
-  std::ifstream rgb(kSingleZoneColorPath);
-  if (rgb) {
-    std::string rgb_mode = read_text_file(kSingleZoneColorPath);
+  std::string rgb_mode = read_text_file(kSingleZoneColorPath);
+  if (!rgb_mode.empty()) {
     return rgb_mode;
   }
 
@@ -191,8 +205,16 @@ std::string get_keyboard_zone_color(int zone) {
 }
 
 std::string set_keyboard_color(const std::string &color) {
+  std::array<int, 3> rgb_values;
+  if (!parse_rgb_triplet(color, &rgb_values))
+    return "ERROR: Invalid RGB color";
+
+  std::string canonical_color = std::to_string(rgb_values[0]) + " " +
+                                std::to_string(rgb_values[1]) + " " +
+                                std::to_string(rgb_values[2]);
+
   if (omen_4zone_exists()) {
-    std::string hex_val = rgb_triplet_to_hex(color);
+    std::string hex_val = rgb_triplet_to_hex(canonical_color);
     if (hex_val.empty())
       return "ERROR: Invalid RGB color";
 
@@ -207,7 +229,7 @@ std::string set_keyboard_color(const std::string &color) {
 
   std::ofstream rgb(kSingleZoneColorPath);
   if (rgb) {
-    rgb << color;
+    rgb << canonical_color;
     rgb.flush();
     if (rgb.fail())
       return "ERROR: Failed to write RGB color";
@@ -222,15 +244,23 @@ std::string set_keyboard_zone_color(int zone, const std::string &color) {
   if (zone < 0 || zone >= kFourZoneCount)
     return "ERROR: Invalid zone";
 
+  std::array<int, 3> rgb_values;
+  if (!parse_rgb_triplet(color, &rgb_values))
+    return "ERROR: Invalid RGB color";
+
+  std::string canonical_color = std::to_string(rgb_values[0]) + " " +
+                                std::to_string(rgb_values[1]) + " " +
+                                std::to_string(rgb_values[2]);
+
   if (omen_4zone_exists()) {
-    std::string hex_val = rgb_triplet_to_hex(color);
+    std::string hex_val = rgb_triplet_to_hex(canonical_color);
     if (hex_val.empty())
       return "ERROR: Invalid RGB color";
 
     return write_rgb_zone_with_helper(zone, hex_val);
   }
 
-  return set_keyboard_color(color);
+  return set_keyboard_color(canonical_color);
 }
 
 std::string get_keyboard_brightness() {
@@ -246,12 +276,16 @@ std::string get_keyboard_brightness() {
 }
 
 std::string set_keyboard_brightness(const std::string &value) {
+  int brightness_value = 0;
+  if (!parse_bounded_int(value, 0, 255, &brightness_value))
+    return "ERROR: Invalid keyboard brightness";
+
   if (omen_4zone_exists())
     return "OK";
 
   std::ofstream brightness(kSingleZoneBrightnessPath);
   if (brightness) {
-    brightness << value;
+    brightness << brightness_value;
     brightness.flush();
     if (brightness.fail())
       return "ERROR: Failed to write keyboard brightness";

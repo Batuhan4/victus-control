@@ -1,30 +1,38 @@
-#include <algorithm>
 #include <atomic>
-#include <cctype>
+#include <csignal>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
 #include "fan.hpp"
 #include "keyboard.hpp"
+#include "validation.hpp"
 
 #define SOCKET_DIR "/run/victus-control"
 #define SOCKET_PATH SOCKET_DIR "/victus_backend.sock"
 
-static std::atomic<int> active_clients{0};
+namespace {
 
-static void on_client_connected() {
+constexpr uint32_t kMaxCommandLength = 1024;
+
+std::atomic<int> active_clients{0};
+std::atomic<bool> server_running{true};
+int g_server_socket = -1;
+
+void on_client_connected() {
   int current = active_clients.fetch_add(1) + 1;
   std::cout << "Client connected (active: " << current << ")" << std::endl;
 }
 
-static void on_client_disconnected() {
+void on_client_disconnected() {
   int previous = active_clients.fetch_sub(1);
   int current = previous - 1;
   if (previous <= 0) {
@@ -43,54 +51,96 @@ static void on_client_disconnected() {
   }
 }
 
-// Helper function to reliably send a block of data
+void signal_handler(int) {
+  server_running.store(false, std::memory_order_release);
+  if (g_server_socket >= 0) {
+    close(g_server_socket);
+    g_server_socket = -1;
+  }
+}
+
 bool send_all(int socket, const void *buffer, size_t length) {
   const char *ptr = static_cast<const char *>(buffer);
   while (length > 0) {
     ssize_t bytes_sent = send(socket, ptr, length, 0);
-    if (bytes_sent < 1) {
-      std::cerr << "Failed to send data" << std::endl;
+    if (bytes_sent < 0) {
+      if (errno == EINTR)
+        continue;
+      std::cerr << "Failed to send data: " << strerror(errno) << std::endl;
+      return false;
+    }
+    if (bytes_sent == 0) {
+      std::cerr << "Socket closed while sending data" << std::endl;
       return false;
     }
     ptr += bytes_sent;
-    length -= bytes_sent;
+    length -= static_cast<size_t>(bytes_sent);
   }
   return true;
 }
 
-// Helper function to reliably read a block of data
 bool read_all(int socket, void *buffer, size_t length) {
   char *ptr = static_cast<char *>(buffer);
   while (length > 0) {
     ssize_t bytes_read = read(socket, ptr, length);
-    if (bytes_read < 1) {
-      // Client disconnected or error
+    if (bytes_read < 0) {
+      if (errno == EINTR)
+        continue;
       return false;
     }
+    if (bytes_read == 0)
+      return false;
     ptr += bytes_read;
-    length -= bytes_read;
+    length -= static_cast<size_t>(bytes_read);
   }
   return true;
 }
 
-static std::string trim(const std::string &input) {
+bool send_u32_le(int socket, uint32_t value) {
+  unsigned char bytes[4] = {
+      static_cast<unsigned char>(value & 0xFF),
+      static_cast<unsigned char>((value >> 8) & 0xFF),
+      static_cast<unsigned char>((value >> 16) & 0xFF),
+      static_cast<unsigned char>((value >> 24) & 0xFF),
+  };
+  return send_all(socket, bytes, sizeof(bytes));
+}
+
+bool read_u32_le(int socket, uint32_t *value) {
+  if (!value)
+    return false;
+
+  unsigned char bytes[4];
+  if (!read_all(socket, bytes, sizeof(bytes)))
+    return false;
+
+  *value = static_cast<uint32_t>(bytes[0]) |
+           (static_cast<uint32_t>(bytes[1]) << 8) |
+           (static_cast<uint32_t>(bytes[2]) << 16) |
+           (static_cast<uint32_t>(bytes[3]) << 24);
+  return true;
+}
+
+std::string trim(const std::string &input) {
   size_t start = input.find_first_not_of(" \t\r\n");
-  if (start == std::string::npos) {
+  if (start == std::string::npos)
     return "";
-  }
+
   size_t end = input.find_last_not_of(" \t\r\n");
   return input.substr(start, end - start + 1);
 }
 
-static std::string normalize_mode(std::string mode) {
-  for (char &ch : mode) {
-    if (ch == '-' || ch == ' ') {
-      ch = '_';
-    } else {
-      ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
-    }
-  }
-  return mode;
+bool has_extra_tokens(std::stringstream &ss) {
+  std::string extra;
+  return static_cast<bool>(ss >> extra);
+}
+
+void send_response(int client_socket, const std::string &response) {
+  uint32_t len = static_cast<uint32_t>(response.size());
+  if (!send_u32_le(client_socket, len))
+    return;
+  if (!send_all(client_socket, response.data(), len))
+    return;
 }
 
 void handle_command(const std::string &command_str, int client_socket) {
@@ -103,15 +153,25 @@ void handle_command(const std::string &command_str, int client_socket) {
   if (command == "GET_FAN_SPEED") {
     std::string fan_num;
     ss >> fan_num;
-    response = get_fan_speed(fan_num);
+    if (!fan_num.empty() && !has_extra_tokens(ss)) {
+      response = get_fan_speed(fan_num);
+    } else {
+      response = "ERROR: Invalid GET_FAN_SPEED command format";
+    }
+  } else if (command == "GET_FAN_MAX_SPEED") {
+    std::string fan_num;
+    ss >> fan_num;
+    if (!fan_num.empty() && !has_extra_tokens(ss)) {
+      response = get_fan_max_speed(fan_num);
+    } else {
+      response = "ERROR: Invalid GET_FAN_MAX_SPEED command format";
+    }
   } else if (command == "SET_FAN_SPEED") {
     std::string fan_num;
     std::string speed;
     ss >> fan_num >> speed;
-    if (!fan_num.empty() && !speed.empty()) {
-      response =
-          set_fan_speed(fan_num, speed, true,
-                        true); // true = allow triggering fan_mode_trigger
+    if (!fan_num.empty() && !speed.empty() && !has_extra_tokens(ss)) {
+      response = set_fan_speed(fan_num, speed, true, true);
     } else {
       response = "ERROR: Invalid SET_FAN_SPEED command format";
     }
@@ -124,18 +184,31 @@ void handle_command(const std::string &command_str, int client_socket) {
     } else {
       std::string mode = normalize_mode(remainder);
       response = set_fan_mode(mode);
-      if (response == "OK") {
+      if (response == "OK")
         fan_mode_trigger(mode);
-      }
     }
   } else if (command == "GET_FAN_MODE") {
-    response = get_fan_mode();
+    if (!has_extra_tokens(ss)) {
+      response = get_fan_mode();
+    } else {
+      response = "ERROR: Invalid GET_FAN_MODE command format";
+    }
+  } else if (command == "GET_CPU_TEMP") {
+    if (!has_extra_tokens(ss)) {
+      response = get_cpu_temperature();
+    } else {
+      response = "ERROR: Invalid GET_CPU_TEMP command format";
+    }
   } else if (command == "GET_KEYBOARD_COLOR") {
-    response = get_keyboard_color();
+    if (!has_extra_tokens(ss)) {
+      response = get_keyboard_color();
+    } else {
+      response = "ERROR: Invalid GET_KEYBOARD_COLOR command format";
+    }
   } else if (command == "SET_KEYBOARD_COLOR") {
     std::string r, g, b;
     ss >> r >> g >> b;
-    if (!r.empty() && !g.empty() && !b.empty()) {
+    if (!r.empty() && !g.empty() && !b.empty() && !has_extra_tokens(ss)) {
       response = set_keyboard_color(r + " " + g + " " + b);
     } else {
       response = "ERROR: Invalid SET_KEYBOARD_COLOR command format";
@@ -143,49 +216,87 @@ void handle_command(const std::string &command_str, int client_socket) {
   } else if (command == "SET_KEYBOARD_ZONE_COLOR") {
     std::string zone_str, r, g, b;
     ss >> zone_str >> r >> g >> b;
-    if (!zone_str.empty() && !r.empty() && !g.empty() && !b.empty()) {
-      try {
-        int zone = std::stoi(zone_str);
-        response = set_keyboard_zone_color(zone, r + " " + g + " " + b);
-      } catch (...) {
-        response = "ERROR: Invalid zone value";
-      }
+    int zone = 0;
+    if (!zone_str.empty() && !r.empty() && !g.empty() && !b.empty() &&
+        !has_extra_tokens(ss) &&
+        parse_bounded_int(zone_str, 0, 3, &zone)) {
+      response = set_keyboard_zone_color(zone, r + " " + g + " " + b);
     } else {
       response = "ERROR: Invalid SET_KEYBOARD_ZONE_COLOR command format";
     }
   } else if (command == "GET_KEYBOARD_ZONE_COLOR") {
     std::string zone_str;
+    int zone = 0;
     ss >> zone_str;
-    if (!zone_str.empty()) {
-      try {
-        int zone = std::stoi(zone_str);
-        response = get_keyboard_zone_color(zone);
-      } catch (...) {
-        response = "ERROR: Invalid zone value";
-      }
+    if (!zone_str.empty() && !has_extra_tokens(ss) &&
+        parse_bounded_int(zone_str, 0, 3, &zone)) {
+      response = get_keyboard_zone_color(zone);
     } else {
       response = "ERROR: Invalid GET_KEYBOARD_ZONE_COLOR command format";
     }
   } else if (command == "GET_KEYBOARD_TYPE") {
-    response = get_keyboard_type();
+    if (!has_extra_tokens(ss)) {
+      response = get_keyboard_type();
+    } else {
+      response = "ERROR: Invalid GET_KEYBOARD_TYPE command format";
+    }
   } else if (command == "GET_KBD_BRIGHTNESS") {
-    response = get_keyboard_brightness();
+    if (!has_extra_tokens(ss)) {
+      response = get_keyboard_brightness();
+    } else {
+      response = "ERROR: Invalid GET_KBD_BRIGHTNESS command format";
+    }
   } else if (command == "SET_KBD_BRIGHTNESS") {
     std::string value;
     ss >> value;
-    response = set_keyboard_brightness(value);
-  } else
+    if (!value.empty() && !has_extra_tokens(ss)) {
+      response = set_keyboard_brightness(value);
+    } else {
+      response = "ERROR: Invalid SET_KBD_BRIGHTNESS command format";
+    }
+  } else {
     response = "ERROR: Unknown command";
+  }
 
-  uint32_t len = response.length();
-  if (!send_all(client_socket, &len, sizeof(len)))
-    return;
-  if (!send_all(client_socket, response.c_str(), len))
-    return;
+  send_response(client_socket, response);
 }
 
+void handle_client(int client_socket) {
+  on_client_connected();
+
+  while (server_running.load(std::memory_order_acquire)) {
+    uint32_t cmd_len = 0;
+    if (!read_u32_le(client_socket, &cmd_len))
+      break;
+
+    if (cmd_len == 0 || cmd_len > kMaxCommandLength) {
+      std::cerr << "Command too long or empty (" << cmd_len
+                << " bytes). Closing connection.\n";
+      break;
+    }
+
+    std::vector<char> buffer(cmd_len);
+    if (!read_all(client_socket, buffer.data(), cmd_len))
+      break;
+
+    handle_command(std::string(buffer.begin(), buffer.end()), client_socket);
+  }
+
+  close(client_socket);
+  on_client_disconnected();
+}
+
+} // namespace
+
 int main() {
-  int server_socket, client_socket;
+  struct sigaction sa = {};
+  sa.sa_handler = signal_handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigaction(SIGTERM, &sa, nullptr);
+  sigaction(SIGINT, &sa, nullptr);
+
+  int server_socket;
   struct sockaddr_un server_addr;
 
   unlink(SOCKET_PATH);
@@ -195,6 +306,7 @@ int main() {
     std::cerr << "Error creating socket: " << strerror(errno) << std::endl;
     return 1;
   }
+  g_server_socket = server_socket;
 
   memset(&server_addr, 0, sizeof(server_addr));
   server_addr.sun_family = AF_UNIX;
@@ -204,6 +316,7 @@ int main() {
            sizeof(server_addr)) < 0) {
     std::cerr << "Bind failed: " << strerror(errno) << std::endl;
     close(server_socket);
+    g_server_socket = -1;
     return 1;
   }
 
@@ -211,12 +324,14 @@ int main() {
     std::cerr << "Failed to set socket permissions: " << strerror(errno)
               << std::endl;
     close(server_socket);
+    g_server_socket = -1;
     return 1;
   }
 
   if (listen(server_socket, 5) < 0) {
     std::cerr << "Listen failed: " << strerror(errno) << std::endl;
     close(server_socket);
+    g_server_socket = -1;
     return 1;
   }
 
@@ -228,42 +343,26 @@ int main() {
               << std::endl;
   }
 
-  while (true) {
-    client_socket = accept(server_socket, nullptr, nullptr);
+  while (server_running.load(std::memory_order_acquire)) {
+    int client_socket = accept(server_socket, nullptr, nullptr);
     if (client_socket < 0) {
+      if (!server_running.load(std::memory_order_acquire))
+        break;
+      if (errno == EINTR)
+        continue;
       perror("accept");
       continue;
     }
 
-    on_client_connected();
-
-    while (true) {
-      uint32_t cmd_len;
-      if (!read_all(client_socket, &cmd_len, sizeof(cmd_len))) {
-        std::cerr << "Client disconnected or error occurred while reading "
-                     "command length.\n";
-        break;
-      }
-
-      if (cmd_len > 1024) { // Basic sanity check
-        std::cerr << "Command too long. Closing connection.\n";
-        break;
-      }
-
-      std::vector<char> buffer(cmd_len);
-      if (!read_all(client_socket, buffer.data(), cmd_len)) {
-        std::cerr
-            << "Client disconnected or error occurred while reading command.\n";
-        break;
-      }
-
-      handle_command(std::string(buffer.begin(), buffer.end()), client_socket);
-    }
-
-    close(client_socket);
-    on_client_disconnected();
+    std::thread(handle_client, client_socket).detach();
   }
 
-  close(server_socket);
+  if (g_server_socket >= 0) {
+    close(g_server_socket);
+    g_server_socket = -1;
+  }
+  shutdown_fan_controller();
+  unlink(SOCKET_PATH);
+  std::cout << "Server shut down." << std::endl;
   return 0;
 }

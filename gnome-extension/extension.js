@@ -19,9 +19,8 @@ import * as Slider from 'resource:///org/gnome/shell/ui/slider.js';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const SOCKET_PATH = '/run/victus-control/victus_backend.sock';
-const MIN_RPM = 2000;
-const FAN1_MAX_RPM = 5800;
-const FAN2_MAX_RPM = 6100;
+const MIN_RPM = 2600;
+const DEFAULT_FAN_MAX_RPM = [5800, 6100];
 const RPM_STEPS = 8;
 
 // Fan modes supported by the backend
@@ -101,6 +100,51 @@ function colorNameForHex(hexColor) {
     return preset ? preset.name : `#${normalized}`;
 }
 
+function encodeUint32LE(value) {
+    return Uint8Array.of(
+        value & 0xFF,
+        (value >> 8) & 0xFF,
+        (value >> 16) & 0xFF,
+        (value >> 24) & 0xFF
+    );
+}
+
+function decodeUint32LE(bytes) {
+    if (!bytes || bytes.length !== 4)
+        throw new Error('Invalid length prefix');
+
+    return bytes[0] |
+        (bytes[1] << 8) |
+        (bytes[2] << 16) |
+        (bytes[3] << 24);
+}
+
+function writeBytesAsync(stream, bytes) {
+    return new Promise((resolve, reject) => {
+        stream.write_bytes_async(GLib.Bytes.new(bytes), GLib.PRIORITY_DEFAULT, null, (source, result) => {
+            try {
+                resolve(source.write_bytes_finish(result));
+            } catch (e) {
+                reject(e);
+            }
+        });
+    });
+}
+
+function readBytesAsync(stream, length) {
+    return new Promise((resolve, reject) => {
+        stream.read_bytes_async(length, GLib.PRIORITY_DEFAULT, null, (source, result) => {
+            try {
+                let bytes = source.read_bytes_finish(result);
+                let data = bytes.get_data();
+                resolve(data ? Uint8Array.from(data) : new Uint8Array());
+            } catch (e) {
+                reject(e);
+            }
+        });
+    });
+}
+
 class VictusIndicator extends PanelMenu.Button {
     static {
         GObject.registerClass(this);
@@ -112,6 +156,7 @@ class VictusIndicator extends PanelMenu.Button {
         this._extension = extension;
         this._currentFanMode = FAN_MODES.AUTO;
         this._currentFanSpeed = ['--', '--'];
+        this._fanMaxRpm = [...DEFAULT_FAN_MAX_RPM];
         this._currentKeyboardColor = 'FFFFFF';
         this._currentKeyboardBrightness = 255;
         this._keyboardAvailable = true;
@@ -187,12 +232,15 @@ class VictusIndicator extends PanelMenu.Button {
 
         // Status Display
         this._statusItem = new PopupMenu.PopupMenuItem('Status: --', { reactive: false });
+        this._statusItem.label.add_style_class_name('victus-status');
         this.menu.addMenuItem(this._statusItem);
 
         this._tempItem = new PopupMenu.PopupMenuItem('🌡️ Temp: -- °C', { reactive: false });
+        this._tempItem.label.add_style_class_name('victus-status');
         this.menu.addMenuItem(this._tempItem);
 
         this._rpmItem = new PopupMenu.PopupMenuItem('💨 Fan: -- / -- RPM', { reactive: false });
+        this._rpmItem.label.add_style_class_name('victus-status');
         this.menu.addMenuItem(this._rpmItem);
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -280,6 +328,31 @@ class VictusIndicator extends PanelMenu.Button {
         });
     }
 
+    async _writeAll(bytes) {
+        let offset = 0;
+        while (offset < bytes.length) {
+            let written = await writeBytesAsync(this._outputStream, bytes.subarray(offset));
+            if (written <= 0)
+                throw new Error('Socket write returned no data');
+            offset += written;
+        }
+    }
+
+    async _readExact(length) {
+        let buffer = new Uint8Array(length);
+        let offset = 0;
+
+        while (offset < length) {
+            let chunk = await readBytesAsync(this._inputStream, length - offset);
+            if (!chunk.length)
+                throw new Error('Unexpected end of stream');
+            buffer.set(chunk, offset);
+            offset += chunk.length;
+        }
+
+        return buffer;
+    }
+
     _sendCommand(command) {
         let run = async () => {
             await this._ensureConnection();
@@ -287,18 +360,14 @@ class VictusIndicator extends PanelMenu.Button {
             try {
                 let encoder = new TextEncoder();
                 let cmdBytes = encoder.encode(command);
-                let lenBytes = new Uint8Array(4);
-                let dv = new DataView(lenBytes.buffer);
-                dv.setUint32(0, cmdBytes.length, true);
+                await this._writeAll(encodeUint32LE(cmdBytes.length));
+                await this._writeAll(cmdBytes);
 
-                this._outputStream.write_all(lenBytes, null);
-                this._outputStream.write_all(cmdBytes, null);
+                let responseLen = decodeUint32LE(await this._readExact(4));
+                if (responseLen < 0 || responseLen > 4096)
+                    throw new Error(`Invalid response length: ${responseLen}`);
 
-                let responseLenBytes = this._inputStream.read_bytes(4, null).get_data();
-                let responseLenDv = new DataView(responseLenBytes.buffer);
-                let responseLen = responseLenDv.getUint32(0, true);
-
-                let responseBytes = this._inputStream.read_bytes(responseLen, null).get_data();
+                let responseBytes = await this._readExact(responseLen);
                 let decoder = new TextDecoder();
                 return decoder.decode(responseBytes);
             } catch (e) {
@@ -326,11 +395,12 @@ class VictusIndicator extends PanelMenu.Button {
     }
 
     async _setFanSpeed(fan, value) {
-        let targetRpm = sliderValueToRpm(value, fan === '1' ? FAN1_MAX_RPM : FAN2_MAX_RPM);
+        let fanIndex = fan === '1' ? 0 : 1;
+        let targetRpm = sliderValueToRpm(value, this._fanMaxRpm[fanIndex]);
         try {
             let response = await this._sendCommand(`SET_FAN_SPEED ${fan} ${targetRpm}`);
             if (!response.startsWith('ERROR')) {
-                this._currentFanSpeed[fan === '1' ? 0 : 1] = `${targetRpm}`;
+                this._currentFanSpeed[fanIndex] = `${targetRpm}`;
                 this._rpmItem.label.text = `💨 Fan: ${this._currentFanSpeed[0]} / ${this._currentFanSpeed[1]} RPM`;
             }
         } catch (e) {
@@ -431,7 +501,25 @@ class VictusIndicator extends PanelMenu.Button {
         }
     }
 
+    async _refreshFanLimits() {
+        try {
+            let fan1Max = await this._sendCommand('GET_FAN_MAX_SPEED 1');
+            let fan2Max = await this._sendCommand('GET_FAN_MAX_SPEED 2');
+            let parsedFan1 = Number.parseInt(fan1Max.trim(), 10);
+            let parsedFan2 = Number.parseInt(fan2Max.trim(), 10);
+
+            if (Number.isFinite(parsedFan1) && parsedFan1 > MIN_RPM)
+                this._fanMaxRpm[0] = parsedFan1;
+            if (Number.isFinite(parsedFan2) && parsedFan2 > MIN_RPM)
+                this._fanMaxRpm[1] = parsedFan2;
+        } catch (e) {
+            console.error('Victus: Failed to refresh fan limits:', e);
+            this._fanMaxRpm = [...DEFAULT_FAN_MAX_RPM];
+        }
+    }
+
     _startStatusUpdates() {
+        this._refreshFanLimits();
         this._refreshKeyboardState();
         this._updateStatus();
         this._updateTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 3, () => {
@@ -458,16 +546,10 @@ class VictusIndicator extends PanelMenu.Button {
                 this._rpmItem.label.text = `💨 Fan: ${this._currentFanSpeed[0]} / ${this._currentFanSpeed[1]} RPM`;
             }
 
-            // Get CPU temp (from sysfs)
-            try {
-                let [ok, contents] = GLib.file_get_contents('/sys/class/thermal/thermal_zone0/temp');
-                if (ok) {
-                    let temp = parseInt(new TextDecoder().decode(contents)) / 1000;
-                    this._tempItem.label.text = `🌡️ CPU: ${temp.toFixed(0)} °C`;
-                }
-            } catch (e) {
-                // Ignore temp read errors
-            }
+            // Get CPU temp (from backend sensor discovery)
+            let tempResponse = await this._sendCommand('GET_CPU_TEMP');
+            if (!tempResponse.startsWith('ERROR'))
+                this._tempItem.label.text = `🌡️ CPU: ${tempResponse.trim()} °C`;
 
             // Update status
             this._statusItem.label.text = `Status: Connected`;

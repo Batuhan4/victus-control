@@ -1,6 +1,6 @@
 # Victus Control GNOME Shell Extension
 
-A GNOME Shell extension for controlling HP Victus laptop fans and keyboard RGB lighting directly from the top panel.
+A GNOME Shell extension for controlling HP Victus / Omen fan modes and keyboard lighting directly from the top panel.
 
 ## Features
 
@@ -13,7 +13,12 @@ A GNOME Shell extension for controlling HP Victus laptop fans and keyboard RGB l
 
 - **victus-control backend**: This extension requires the `victus-backend.service` to be running
 - **GNOME Shell**: Version 45 or later
-- **HP Victus Laptop**: The patched hp-wmi driver must be installed
+- **HP Victus / Omen laptop**: The patched `hp_wmi` driver must be installed
+
+## Support Scope
+
+- Fully integrated with the main `victus-control` installer on Fedora and Arch-based systems.
+- Should also work on Ubuntu GNOME and other GNOME desktops if the backend service is already installed and exposing `/run/victus-control/victus_backend.sock`.
 
 ## Installation
 
@@ -25,7 +30,7 @@ A GNOME Shell extension for controlling HP Victus laptop fans and keyboard RGB l
 2. Install the extension:
    ```bash
    cd gnome-extension
-   ./install.sh
+   bash ./install.sh
    ```
 
 3. Enable the extension:
@@ -44,6 +49,8 @@ Click on the fan icon (🌀) in the top panel to access:
 - **Keyboard RGB**: Choose color presets and adjust brightness
 - **Status**: View current CPU temperature and fan RPM
 
+When the main project is installed via `sudo ./install.sh` on a GNOME desktop, this extension is installed automatically for the desktop user.
+
 ## Development
 
 To test changes without restarting GNOME Shell:
@@ -56,7 +63,7 @@ To test changes without restarting GNOME Shell:
 
 View extension logs:
 ```bash
-journalctl -f -o cat /usr/bin/gnome-shell | grep -i victus
+journalctl -f -o cat /usr/bin/gnome-shell | grep --line-buffered -i victus
 ```
 
 ## License

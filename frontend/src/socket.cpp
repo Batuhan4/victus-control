@@ -1,4 +1,5 @@
 #include "socket.hpp"
+#include <cstdint>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -9,9 +10,8 @@
 #include <future>
 #include <mutex>
 
-// Helper function to reliably send a block of data
 bool send_all(int socket, const void *buffer, size_t length) {
-    const char *ptr = static_cast<const char*>(buffer);
+  const char *ptr = static_cast<const char *>(buffer);
   while (length > 0) {
     ssize_t bytes_sent = send(socket, ptr, length, 0);
     if (bytes_sent < 1) {
@@ -23,9 +23,8 @@ bool send_all(int socket, const void *buffer, size_t length) {
   return true;
 }
 
-// Helper function to reliably read a block of data
 bool read_all(int socket, void *buffer, size_t length) {
-    char *ptr = static_cast<char*>(buffer);
+  char *ptr = static_cast<char *>(buffer);
   while (length > 0) {
     ssize_t bytes_read = recv(socket, ptr, length, 0);
     if (bytes_read < 1) {
@@ -34,6 +33,31 @@ bool read_all(int socket, void *buffer, size_t length) {
     ptr += bytes_read;
     length -= bytes_read;
   }
+  return true;
+}
+
+bool send_u32_le(int socket, uint32_t value) {
+  unsigned char bytes[4] = {
+      static_cast<unsigned char>(value & 0xFF),
+      static_cast<unsigned char>((value >> 8) & 0xFF),
+      static_cast<unsigned char>((value >> 16) & 0xFF),
+      static_cast<unsigned char>((value >> 24) & 0xFF),
+  };
+  return send_all(socket, bytes, sizeof(bytes));
+}
+
+bool read_u32_le(int socket, uint32_t *value) {
+  if (!value)
+    return false;
+
+  unsigned char bytes[4];
+  if (!read_all(socket, bytes, sizeof(bytes)))
+    return false;
+
+  *value = static_cast<uint32_t>(bytes[0]) |
+           (static_cast<uint32_t>(bytes[1]) << 8) |
+           (static_cast<uint32_t>(bytes[2]) << 16) |
+           (static_cast<uint32_t>(bytes[3]) << 24);
   return true;
 }
 
@@ -115,15 +139,15 @@ std::string VictusSocketClient::send_command(const std::string &command)
     }
   }
 
-  uint32_t len = command.length();
-    if (!send_all(sockfd, &len, sizeof(len)) || !send_all(sockfd, command.c_str(), len)) {
+  uint32_t len = static_cast<uint32_t>(command.length());
+  if (!send_u32_le(sockfd, len) || !send_all(sockfd, command.c_str(), len)) {
     std::cerr << "Failed to send command, closing socket." << std::endl;
     close_socket();
     return "ERROR: Failed to send command";
   }
 
-  uint32_t response_len;
-  if (!read_all(sockfd, &response_len, sizeof(response_len))) {
+  uint32_t response_len = 0;
+  if (!read_u32_le(sockfd, &response_len)) {
     std::cerr << "Failed to read response length, closing socket." << std::endl;
     close_socket();
     return "ERROR: Failed to read response length";

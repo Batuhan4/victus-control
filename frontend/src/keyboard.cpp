@@ -1,4 +1,5 @@
 #include "keyboard.hpp"
+#include <cstdlib>
 #include <fstream>
 #include <gtk/gtk.h>
 #include <iostream>
@@ -65,6 +66,18 @@ bool any_zone_has_color(const GdkRGBA zone_colors[kFourZoneCount]) {
   }
 
   return false;
+}
+
+std::string resolve_home_directory() {
+  const char *home = getenv("HOME");
+  if (home && home[0] != '\0')
+    return home;
+
+  struct passwd *pw = getpwuid(getuid());
+  if (pw && pw->pw_dir && pw->pw_dir[0] != '\0')
+    return pw->pw_dir;
+
+  return ".";
 }
 
 void get_keyboard_visual_origin(GtkWidget *widget, int *start_x, int *start_y) {
@@ -145,13 +158,7 @@ void VictusKeyboardControl::detect_keyboard_type() {
 
 void VictusKeyboardControl::load_presets() {
   // Create config directory if it doesn't exist
-  const char *home = getenv("HOME");
-  if (!home) {
-    struct passwd *pw = getpwuid(getuid());
-    home = pw->pw_dir;
-  }
-
-  std::string config_dir = std::string(home) + "/.config/victus-control";
+  std::string config_dir = resolve_home_directory() + "/.config/victus-control";
   mkdir(config_dir.c_str(), 0755);
 
   std::string preset_file = config_dir + "/presets.conf";
@@ -737,13 +744,7 @@ void VictusKeyboardControl::save_current_preset(
   }
 
   // Save to file
-  const char *home = getenv("HOME");
-  if (!home) {
-    struct passwd *pw = getpwuid(getuid());
-    home = pw->pw_dir;
-  }
-
-  std::string config_dir = std::string(home) + "/.config/victus-control";
+  std::string config_dir = resolve_home_directory() + "/.config/victus-control";
   std::string preset_file = config_dir + "/presets.conf";
 
   std::ofstream out(preset_file);
@@ -766,13 +767,7 @@ void VictusKeyboardControl::remove_preset(const std::string &preset_name) {
   presets.erase(preset_name);
 
   // Save to file
-  const char *home = getenv("HOME");
-  if (!home) {
-    struct passwd *pw = getpwuid(getuid());
-    home = pw->pw_dir;
-  }
-
-  std::string config_dir = std::string(home) + "/.config/victus-control";
+  std::string config_dir = resolve_home_directory() + "/.config/victus-control";
   std::string preset_file = config_dir + "/presets.conf";
 
   std::ofstream out(preset_file);

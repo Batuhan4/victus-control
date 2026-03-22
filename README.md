@@ -1,20 +1,28 @@
 # victus-control
 
-Fan control for HP Victus / Omen laptops on Linux. Stock firmware keeps both fans near **2000 RPM** in AUTO—even while the CPU cooks. victus-control delivers a real “Better Auto” curve, manual RPM control, and keyboard lighting support via a patched `hp-wmi` driver, a privileged backend, and a GTK4 desktop client.
+Fan control and keyboard lighting for HP Victus / Omen laptops on Linux. Stock firmware keeps both fans near **2000 RPM** in AUTO even while the CPU cooks. `victus-control` adds a real Better Auto curve, manual RPM control, a privileged backend, a GTK4 desktop app, and a GNOME Shell extension.
 
 > [!WARNING]
-> Validated primarily on **HP Victus 16-s00xxxx** running CachyOS (Arch). Other models may work but are unverified—monitor thermals carefully. On **hp victus 15 fa0xxx**, manual fan speeds are not supported, only MAX and AUTO works, better auto can be toggled too, but there is no difference i noticed. 
+> Validated primarily on **HP Victus 16-s00xxxx** and contributor-tested on Fedora/Arch variants listed in PRs and issues. Other models may work but are not guaranteed. Monitor thermals carefully. On **HP Victus 15 fa0xxx**, manual fan speeds appear unsupported; only `MAX`, `AUTO`, and Better Auto are known to behave.
 
 ## Why victus-control
 - **Better Auto mode** (selectable from the GTK UI or CLI) samples CPU/GPU temps & utilisation every ~2 s, clamps to each fan’s hardware max, and reapplies targets every 90 s with the firmware-required 10 s stagger. Result: fans climb smoothly with load instead of idling at 2000 RPM like HP’s AUTO.
 - **Manual mode** exposes eight RPM steps (~2000 ➜ 5800/6100 RPM) with per-fan precision and watchdog refreshes that keep settings alive through firmware quirks.
-- **Keyboard lighting** toggles single-zone RGB colour and brightness.
+- **Keyboard lighting** supports single-zone RGB colour and brightness on compatible hardware.
+- **GNOME Shell integration** exposes fan and keyboard controls from the top panel.
+
+## Support Matrix
+- **Main installer**: Arch-based distros and Fedora.
+- **Desktop app**: GTK4 app installed by the main project installer.
+- **GNOME Shell extension**: supported on GNOME Shell 45+ and auto-installed by `install.sh` when GNOME is present.
+- **Ubuntu GNOME**: the extension should work on GNOME-based Ubuntu setups if `victus-backend.service` is already installed and reachable, but the project does not currently ship a full Ubuntu installer.
 
 ## System Requirements
 - 64-bit Linux with `systemd`.
 - Supported installer targets:
   - Arch-based distros via `pacman`
   - Fedora via `dnf`
+- GNOME Shell 45+ if you want the panel extension.
 - Root privileges for installing the DKMS module, sudoers rules, and systemd units.
 
 ## Install & Update
@@ -25,6 +33,7 @@ cd victus-control
 sudo ./install.sh
 ```
 The wrapper routes to `arch-install.sh` or `fedora-install.sh` based on your OS.
+On GNOME systems, it also installs the panel extension for the desktop user automatically.
 
 ### Fedora notes
 - Validated by contributors on `HP Victus 16-S0046NT` with Fedora 43.
@@ -57,15 +66,22 @@ A GNOME Shell extension is available for quick access to fan and keyboard contro
 
 ### Installation
 ```bash
+sudo ./install.sh
+gnome-extensions enable victus-control@victus
+```
+`install.sh` installs the extension automatically on GNOME systems. You only need the manual `gnome-extensions enable ...` step after install or after logging back in.
+
+If you want to install the extension by itself:
+```bash
 cd gnome-extension
-chmod +x install.sh
-./install.sh
+bash ./install.sh
 gnome-extensions enable victus-control@victus
 ```
 
 ### Requirements
 - GNOME Shell 45 or later
 - `victus-backend.service` must be running
+- On Ubuntu GNOME and other GNOME desktops, the extension can be installed separately as long as the backend socket is available.
 
 See [gnome-extension/README.md](gnome-extension/README.md) for detailed documentation.
 
@@ -82,6 +98,7 @@ sudo meson install -C build
 - **Fans ignore commands**: ensure the DKMS module is loaded (`dkms status | grep hp-wmi-fan-and-backlight-control`, `modprobe --show-depends hp_wmi | tail -n1` should point at `/extra/hp-wmi.ko.xz`).
 - **Permission errors**: confirm `victus` group membership (`groups $USER`), then re-run the installer or `sudo usermod -aG victus $USER`.
 - **Socket missing**: `sudo systemd-tmpfiles --create`; `sudo systemctl restart victus-backend.service`.
+- **GNOME extension missing after install**: log out/in once, then run `gnome-extensions enable victus-control@victus`.
 - **Uninstall**: `sudo systemctl disable --now victus-backend` and `sudo dkms remove hp-wmi-fan-and-backlight-control/0.0.2 --all`.
 
 ## Contributing

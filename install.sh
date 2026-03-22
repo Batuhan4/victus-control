@@ -27,7 +27,7 @@ install_gnome_extension_if_available() {
         return 0
     fi
 
-    if [[ ! -x "${script_dir}/gnome-extension/install.sh" ]]; then
+    if [[ ! -f "${script_dir}/gnome-extension/install.sh" ]]; then
         echo "--> GNOME extension installer not found; skipping GNOME extension installation."
         return 0
     fi
