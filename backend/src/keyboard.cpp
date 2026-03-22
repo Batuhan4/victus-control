@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "keyboard.hpp"
+#include "validation.hpp"
 
 namespace {
 
@@ -52,27 +53,6 @@ bool parse_hex_color(const std::string &hex, std::array<int, 3> *rgb) {
     return false;
   }
 
-  return true;
-}
-
-bool parse_rgb_triplet(const std::string &color, std::array<int, 3> *rgb) {
-  std::stringstream ss(color);
-  int red;
-  int green;
-  int blue;
-  char extra;
-
-  if (!(ss >> red >> green >> blue))
-    return false;
-
-  if (ss >> extra)
-    return false;
-
-  if (red < 0 || red > 255 || green < 0 || green > 255 || blue < 0 ||
-      blue > 255)
-    return false;
-
-  *rgb = {red, green, blue};
   return true;
 }
 
@@ -191,8 +171,16 @@ std::string get_keyboard_zone_color(int zone) {
 }
 
 std::string set_keyboard_color(const std::string &color) {
+  std::array<int, 3> rgb_values;
+  if (!parse_rgb_triplet(color, &rgb_values))
+    return "ERROR: Invalid RGB color";
+
+  std::string canonical_color = std::to_string(rgb_values[0]) + " " +
+                                std::to_string(rgb_values[1]) + " " +
+                                std::to_string(rgb_values[2]);
+
   if (omen_4zone_exists()) {
-    std::string hex_val = rgb_triplet_to_hex(color);
+    std::string hex_val = rgb_triplet_to_hex(canonical_color);
     if (hex_val.empty())
       return "ERROR: Invalid RGB color";
 
@@ -207,7 +195,7 @@ std::string set_keyboard_color(const std::string &color) {
 
   std::ofstream rgb(kSingleZoneColorPath);
   if (rgb) {
-    rgb << color;
+    rgb << canonical_color;
     rgb.flush();
     if (rgb.fail())
       return "ERROR: Failed to write RGB color";
@@ -222,15 +210,23 @@ std::string set_keyboard_zone_color(int zone, const std::string &color) {
   if (zone < 0 || zone >= kFourZoneCount)
     return "ERROR: Invalid zone";
 
+  std::array<int, 3> rgb_values;
+  if (!parse_rgb_triplet(color, &rgb_values))
+    return "ERROR: Invalid RGB color";
+
+  std::string canonical_color = std::to_string(rgb_values[0]) + " " +
+                                std::to_string(rgb_values[1]) + " " +
+                                std::to_string(rgb_values[2]);
+
   if (omen_4zone_exists()) {
-    std::string hex_val = rgb_triplet_to_hex(color);
+    std::string hex_val = rgb_triplet_to_hex(canonical_color);
     if (hex_val.empty())
       return "ERROR: Invalid RGB color";
 
     return write_rgb_zone_with_helper(zone, hex_val);
   }
 
-  return set_keyboard_color(color);
+  return set_keyboard_color(canonical_color);
 }
 
 std::string get_keyboard_brightness() {
@@ -246,12 +242,16 @@ std::string get_keyboard_brightness() {
 }
 
 std::string set_keyboard_brightness(const std::string &value) {
+  int brightness_value = 0;
+  if (!parse_bounded_int(value, 0, 255, &brightness_value))
+    return "ERROR: Invalid keyboard brightness";
+
   if (omen_4zone_exists())
     return "OK";
 
   std::ofstream brightness(kSingleZoneBrightnessPath);
   if (brightness) {
-    brightness << value;
+    brightness << brightness_value;
     brightness.flush();
     if (brightness.fail())
       return "ERROR: Failed to write keyboard brightness";

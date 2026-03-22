@@ -2,6 +2,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <unistd.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <thread>
@@ -21,6 +22,7 @@
 
 #include "fan.hpp"
 #include "util.hpp"
+#include "validation.hpp"
 
 static std::atomic<int> fan_thread_generation(0);
 static std::atomic<bool> is_reapplying(false);
@@ -60,6 +62,9 @@ static constexpr std::chrono::seconds kBetterAutoReapply{90};
 static constexpr int kBetterAutoCooldownLevel = 5;
 static constexpr std::chrono::seconds kBetterAutoCooldown{90};
 static constexpr std::chrono::seconds kFanApplyGap{10};
+static constexpr const char *kSudoPath = "/usr/bin/sudo";
+static constexpr const char *kFanModeHelperPath = "/usr/bin/set-fan-mode.sh";
+static constexpr const char *kFanSpeedHelperPath = "/usr/bin/set-fan-speed.sh";
 
 static std::array<std::once_flag, 2> fan_max_once;
 static std::array<int, 2> fan_max_cache = kBetterAutoMaxFallback;
@@ -506,10 +511,49 @@ static bool encode_pwm_mode(const std::string &mode, std::string &encoded)
 	return false;
 }
 
+static int run_helper_command(const std::vector<std::string> &args)
+{
+	if (args.empty()) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	std::vector<char *> argv;
+	argv.reserve(args.size() + 1);
+	for (const auto &arg : args) {
+		argv.push_back(const_cast<char *>(arg.c_str()));
+	}
+	argv.push_back(nullptr);
+
+	pid_t pid = fork();
+	if (pid < 0) {
+		return -1;
+	}
+
+	if (pid == 0) {
+		execv(args.front().c_str(), argv.data());
+		_exit(127);
+	}
+
+	int status = 0;
+	while (waitpid(pid, &status, 0) < 0) {
+		if (errno != EINTR) {
+			return -1;
+		}
+	}
+
+	return status;
+}
+
 static std::string apply_fan_mode_with_sudo(const std::string &mode)
 {
-	std::string command = "sudo /usr/bin/set-fan-mode.sh " + mode;
-	int result = system(command.c_str());
+	std::string encoded_mode;
+	if (!encode_pwm_mode(mode, encoded_mode)) {
+		return "ERROR: Invalid fan mode";
+	}
+	(void)encoded_mode;
+
+	int result = run_helper_command({kSudoPath, kFanModeHelperPath, mode});
 
 	if (result == 0) {
 		return "OK";
@@ -896,11 +940,18 @@ std::string ensure_better_auto_mode()
 
 std::string get_fan_speed(const std::string &fan_num)
 {
+	auto fan_index = fan_index_from_string(fan_num);
+	if (!fan_index) {
+		return "ERROR: Invalid fan number";
+	}
+
 	std::string hwmon_path = find_hwmon_directory("/sys/devices/platform/hp-wmi/hwmon");
 
 	if (!hwmon_path.empty())
 	{
-		std::ifstream fan_file(hwmon_path + "/fan" + fan_num + "_input");
+		std::string fan_path =
+		    hwmon_path + "/fan" + std::to_string(*fan_index + 1) + "_input";
+		std::ifstream fan_file(fan_path);
 
 		if (fan_file)
 		{
@@ -928,80 +979,46 @@ std::string get_fan_speed(const std::string &fan_num)
 
 std::string set_fan_speed(const std::string &fan_num, const std::string &speed, bool trigger_mode, bool update_cache)
 {
+    auto fan_index = fan_index_from_string(fan_num);
+    if (!fan_index) {
+        return "ERROR: Invalid fan number";
+    }
+
     int parsed_speed = 0;
-    bool parsed = false;
-    try {
-        parsed_speed = std::stoi(speed);
-        parsed = true;
-    } catch (const std::exception &) {
-        parsed = false;
+    if (!parse_strict_int(speed, &parsed_speed)) {
+        return "ERROR: Invalid fan speed";
     }
 
-    if (parsed) {
-        size_t index = (fan_num == "2") ? 1 : 0;
-        int clamped_speed = clamp_to_fan_limits(index, parsed_speed);
-        if (clamped_speed != parsed_speed) {
-            std::cout << "set_fan_speed: clamped fan " << fan_num << " target from " << parsed_speed << " to " << clamped_speed << std::endl;
-        }
-        std::string clamped_str = std::to_string(clamped_speed);
-        if (update_cache) {
-            std::lock_guard<std::mutex> lock(fan_state_mutex);
-            if (fan_num == "1") {
-                last_fan1_speed = clamped_str;
-            } else if (fan_num == "2") {
-                last_fan2_speed = clamped_str;
-            }
-        }
-
-        // Update command string if we parsed successfully
-        std::string command = "sudo /usr/bin/set-fan-speed.sh " + fan_num + " " + clamped_str;
-
-        std::unique_lock<std::mutex> apply_lock(fan_apply_mutex);
-        auto now = std::chrono::steady_clock::now();
-        if (index == 1 && fan_last_apply[0] != std::chrono::steady_clock::time_point::min()) {
-            auto elapsed = now - fan_last_apply[0];
-            if (elapsed < kFanApplyGap) {
-                auto wait_duration = kFanApplyGap - elapsed;
-                apply_lock.unlock();
-                std::this_thread::sleep_for(wait_duration);
-                apply_lock.lock();
-            }
-        }
-
-        int result = system(command.c_str());
-        fan_last_apply[index] = std::chrono::steady_clock::now();
-        apply_lock.unlock();
-
-        if (result == 0)
-        {
-            // Only trigger fan_mode_trigger if requested and not already reapplying
-            if (trigger_mode && !is_reapplying.load(std::memory_order_acquire) && get_fan_mode() == "MANUAL") {
-                fan_mode_trigger("MANUAL");
-            }
-            return "OK";
-        }
-        else
-        {
-            std::cerr << "Failed to execute set-fan-speed.sh for fan " << fan_num << ". Exit code: " << WEXITSTATUS(result) << std::endl;
-            return "ERROR: Failed to set fan speed";
-        }
+    size_t index = *fan_index;
+    int clamped_speed = clamp_to_fan_limits(index, parsed_speed);
+    if (clamped_speed != parsed_speed) {
+        std::cout << "set_fan_speed: clamped fan " << fan_num << " target from " << parsed_speed << " to " << clamped_speed << std::endl;
     }
-
-    // If parsing failed, fall back to original behavior without clamping
+    std::string clamped_str = std::to_string(clamped_speed);
     if (update_cache) {
         std::lock_guard<std::mutex> lock(fan_state_mutex);
-        if (fan_num == "1") {
-            last_fan1_speed = speed;
-        } else if (fan_num == "2") {
-            last_fan2_speed = speed;
+        if (index == 0) {
+            last_fan1_speed = clamped_str;
+        } else {
+            last_fan2_speed = clamped_str;
         }
     }
 
-    // Construct the command to call the external script with sudo
-    // The script must be in a location like /usr/bin
-    std::string command = "sudo /usr/bin/set-fan-speed.sh " + fan_num + " " + speed;
+    std::unique_lock<std::mutex> apply_lock(fan_apply_mutex);
+    auto now = std::chrono::steady_clock::now();
+    if (index == 1 && fan_last_apply[0] != std::chrono::steady_clock::time_point::min()) {
+        auto elapsed = now - fan_last_apply[0];
+        if (elapsed < kFanApplyGap) {
+            auto wait_duration = kFanApplyGap - elapsed;
+            apply_lock.unlock();
+            std::this_thread::sleep_for(wait_duration);
+            apply_lock.lock();
+        }
+    }
 
-    int result = system(command.c_str());
+    int result = run_helper_command({kSudoPath, kFanSpeedHelperPath, fan_num, clamped_str});
+    fan_last_apply[index] = std::chrono::steady_clock::now();
+    apply_lock.unlock();
 
     if (result == 0)
     {
@@ -1011,9 +1028,20 @@ std::string set_fan_speed(const std::string &fan_num, const std::string &speed, 
         }
         return "OK";
     }
-    else
-    {
-        std::cerr << "Failed to execute set-fan-speed.sh for fan " << fan_num << ". Exit code: " << WEXITSTATUS(result) << std::endl;
+
+    if (result == -1) {
+        std::cerr << "Failed to execute set-fan-speed.sh for fan " << fan_num
+                  << ": " << strerror(errno) << std::endl;
         return "ERROR: Failed to set fan speed";
     }
+
+    if (WIFEXITED(result)) {
+        std::cerr << "Failed to execute set-fan-speed.sh for fan " << fan_num
+                  << ". Exit code: " << WEXITSTATUS(result) << std::endl;
+    } else {
+        std::cerr << "set-fan-speed.sh terminated abnormally for fan "
+                  << fan_num << std::endl;
+    }
+
+    return "ERROR: Failed to set fan speed";
 }

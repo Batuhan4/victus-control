@@ -38,7 +38,7 @@ The installer handles dependency install, user/group creation, DKMS module regis
 - `victus-backend.service` launches automatically at boot, stays active 24/7, and keeps Better Auto applied even when no UI client is connected—so fan tweaks persist without needing to open the app.
 
 ## Daily Usage
-- Launch the GTK app (`victus-control`) or use the CLI client (`test_backend.py`).
+- Launch the GTK app (`victus-control`).
 - Mode dropdown offers `AUTO`, `Better Auto`, `MANUAL`, `MAX`:
   - *Better Auto* is enforced by the background service on each boot, keeps fans in manual PWM, and dynamically adjusts RPMs based on temps/utilisation—ideal for gaming or heavy workloads.
   - *Manual* maps slider positions to calibrated RPM steps; fan 2 honours the 10 s offset automatically.
@@ -51,7 +51,8 @@ meson setup build --prefix=/usr
 meson compile -C build
 sudo meson install -C build
 ```
-- Smoke test (requires backend running): `python test_backend.py`.
+- Run unit tests: `meson test -C build`.
+- Manual smoke test (requires backend running): launch `victus-control`, switch modes, and confirm fan RPM and keyboard changes are reflected in the UI.
 - The installer fetches `hp-wmi-fan-and-backlight-control`; it’s git-ignored to keep the repo lean.
 
 ## Troubleshooting
@@ -61,7 +62,7 @@ sudo meson install -C build
 - **Uninstall**: `sudo systemctl disable --now victus-backend` and `sudo dkms remove hp-wmi-fan-and-backlight-control/0.0.2 --all`.
 
 ## Contributing
-See `AGENTS.md` for coding style, testing, and PR expectations. Hardware validation notes are welcome in PR descriptions.
+Follow the existing Meson/C++ style, run `meson test -C build`, and include hardware validation notes in PR descriptions when you have access to supported laptops.
 
 ## License
 GPLv3. See `LICENSE` for the full text.

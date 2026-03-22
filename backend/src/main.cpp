@@ -13,6 +13,7 @@
 
 #include "fan.hpp"
 #include "keyboard.hpp"
+#include "validation.hpp"
 
 #define SOCKET_DIR "/run/victus-control"
 #define SOCKET_PATH SOCKET_DIR "/victus_backend.sock"
@@ -82,17 +83,6 @@ static std::string trim(const std::string &input) {
   return input.substr(start, end - start + 1);
 }
 
-static std::string normalize_mode(std::string mode) {
-  for (char &ch : mode) {
-    if (ch == '-' || ch == ' ') {
-      ch = '_';
-    } else {
-      ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
-    }
-  }
-  return mode;
-}
-
 void handle_command(const std::string &command_str, int client_socket) {
   std::stringstream ss(command_str);
   std::string command;
@@ -103,7 +93,11 @@ void handle_command(const std::string &command_str, int client_socket) {
   if (command == "GET_FAN_SPEED") {
     std::string fan_num;
     ss >> fan_num;
-    response = get_fan_speed(fan_num);
+    if (!fan_num.empty()) {
+      response = get_fan_speed(fan_num);
+    } else {
+      response = "ERROR: Invalid GET_FAN_SPEED command format";
+    }
   } else if (command == "SET_FAN_SPEED") {
     std::string fan_num;
     std::string speed;
@@ -173,7 +167,11 @@ void handle_command(const std::string &command_str, int client_socket) {
   } else if (command == "SET_KBD_BRIGHTNESS") {
     std::string value;
     ss >> value;
-    response = set_keyboard_brightness(value);
+    if (!value.empty()) {
+      response = set_keyboard_brightness(value);
+    } else {
+      response = "ERROR: Invalid SET_KBD_BRIGHTNESS command format";
+    }
   } else
     response = "ERROR: Unknown command";
 
