@@ -13,7 +13,7 @@ cd "${script_dir}"
 module_name="hp-wmi-fan-and-backlight-control"
 module_version="0.0.2"
 
-verify_hp_wmi_interface() {
+verify_hp_wmi_fan_interface() {
     local hwmon_path
 
     hwmon_path="$(find /sys/devices/platform/hp-wmi/hwmon -mindepth 1 -maxdepth 1 -type d -name 'hwmon*' | head -n 1 || true)"
@@ -27,12 +27,13 @@ verify_hp_wmi_interface() {
         return 1
     fi
 
-    if [[ ! -e /sys/class/leds/hp::kbd_backlight && ! -e /sys/devices/platform/hp-wmi/rgb_zones/zone00 ]]; then
-        echo "Error: Patched hp_wmi keyboard lighting interface was not detected." >&2
-        return 1
-    fi
-
     return 0
+}
+
+warn_if_keyboard_interface_missing() {
+    if [[ ! -e /sys/class/leds/hp::kbd_backlight && ! -e /sys/devices/platform/hp-wmi/rgb_zones/zone00 ]]; then
+        echo "Warning: Patched hp_wmi keyboard lighting interface was not detected. Fan control can still work on this model." >&2
+    fi
 }
 
 reload_patched_hp_wmi() {
@@ -52,13 +53,15 @@ reload_patched_hp_wmi() {
 
     modprobe hp_wmi
 
-    until verify_hp_wmi_interface; do
+    until verify_hp_wmi_fan_interface; do
         attempts=$((attempts + 1))
         if (( attempts >= 3 )); then
             return 1
         fi
         sleep 1
     done
+
+    warn_if_keyboard_interface_missing
 
     return 0
 }
