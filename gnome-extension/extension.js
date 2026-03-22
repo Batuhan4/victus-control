@@ -1,13 +1,14 @@
 /* Victus Control GNOME Shell Extension
- * 
+ *
  * Integrates with victus-backend service for HP Victus laptop
  * fan control and keyboard RGB management.
- * 
+ *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
+import GObject from 'gi://GObject';
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';
 
@@ -17,38 +18,108 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Slider from 'resource:///org/gnome/shell/ui/slider.js';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const SOCKET_PATH = '/run/victus/victus.sock';
+const SOCKET_PATH = '/run/victus-control/victus_backend.sock';
+const MIN_RPM = 2000;
+const FAN1_MAX_RPM = 5800;
+const FAN2_MAX_RPM = 6100;
+const RPM_STEPS = 8;
 
 // Fan modes supported by the backend
 const FAN_MODES = {
-    AUTO: '0',
-    BETTER_AUTO: '1',
-    MANUAL: '2',
-    MAX: '3'
+    AUTO: 'AUTO',
+    BETTER_AUTO: 'BETTER_AUTO',
+    MANUAL: 'MANUAL',
+    MAX: 'MAX',
 };
 
 const FAN_MODE_LABELS = {
-    '0': 'AUTO',
-    '1': 'Better Auto',
-    '2': 'MANUAL',
-    '3': 'MAX'
+    AUTO: 'AUTO',
+    BETTER_AUTO: 'Better Auto',
+    MANUAL: 'MANUAL',
+    MAX: 'MAX',
 };
+
+const COLOR_PRESETS = [
+    { name: 'White', hex: 'FFFFFF' },
+    { name: 'Red', hex: 'FF0000' },
+    { name: 'Green', hex: '00FF00' },
+    { name: 'Blue', hex: '0000FF' },
+    { name: 'Cyan', hex: '00FFFF' },
+    { name: 'Magenta', hex: 'FF00FF' },
+    { name: 'Yellow', hex: 'FFFF00' },
+    { name: 'Orange', hex: 'FF8000' },
+    { name: 'Purple', hex: '8000FF' },
+    { name: 'Off', hex: '000000' },
+];
+
+function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+}
+
+function sliderValueToLevel(value) {
+    return Math.round(clamp(value, 0, 1) * (RPM_STEPS - 1)) + 1;
+}
+
+function levelToRpm(level, maxRpm) {
+    if (RPM_STEPS <= 1)
+        return maxRpm;
+
+    let stepSize = (maxRpm - MIN_RPM) / (RPM_STEPS - 1);
+    return Math.round(MIN_RPM + (level - 1) * stepSize);
+}
+
+function sliderValueToRpm(value, maxRpm) {
+    return levelToRpm(sliderValueToLevel(value), maxRpm);
+}
+
+function rgbTripletToHex(rgbTriplet) {
+    let parts = rgbTriplet.trim().split(/\s+/);
+    if (parts.length !== 3)
+        return null;
+
+    let values = parts.map(part => Number.parseInt(part, 10));
+    if (values.some(value => Number.isNaN(value) || value < 0 || value > 255))
+        return null;
+
+    return values.map(value => value.toString(16).padStart(2, '0').toUpperCase()).join('');
+}
+
+function hexToRgbTriplet(hexColor) {
+    let hex = hexColor.replace(/^#/, '');
+    if (!/^[0-9A-Fa-f]{6}$/.test(hex))
+        return null;
+
+    let red = Number.parseInt(hex.slice(0, 2), 16);
+    let green = Number.parseInt(hex.slice(2, 4), 16);
+    let blue = Number.parseInt(hex.slice(4, 6), 16);
+    return `${red} ${green} ${blue}`;
+}
+
+function colorNameForHex(hexColor) {
+    let normalized = hexColor.replace(/^#/, '').toUpperCase();
+    let preset = COLOR_PRESETS.find(color => color.hex === normalized);
+    return preset ? preset.name : `#${normalized}`;
+}
 
 class VictusIndicator extends PanelMenu.Button {
     static {
-        GLib.Object.registerClass(this);
+        GObject.registerClass(this);
     }
 
     _init(extension) {
         super._init(0.0, 'Victus Control');
 
         this._extension = extension;
-        this._currentFanMode = '0';
-        this._currentFanSpeed = [0, 0];
-        this._currentKeyboardColor = '#FFFFFF';
-        this._currentKeyboardBrightness = 100;
+        this._currentFanMode = FAN_MODES.AUTO;
+        this._currentFanSpeed = ['--', '--'];
+        this._currentKeyboardColor = 'FFFFFF';
+        this._currentKeyboardBrightness = 255;
+        this._keyboardAvailable = true;
         this._updateTimeoutId = null;
         this._connection = null;
+        this._inputStream = null;
+        this._outputStream = null;
+        this._commandQueue = Promise.resolve();
 
         // Panel icon
         this._icon = new St.Icon({
@@ -81,7 +152,7 @@ class VictusIndicator extends PanelMenu.Button {
 
         // Add mode options
         for (let [modeName, modeValue] of Object.entries(FAN_MODES)) {
-            let item = new PopupMenu.PopupMenuItem(modeName.replace('_', ' '));
+            let item = new PopupMenu.PopupMenuItem(FAN_MODE_LABELS[modeName]);
             item.connect('activate', () => this._setFanMode(modeValue));
             this._fanModeSubMenu.menu.addMenuItem(item);
         }
@@ -127,29 +198,16 @@ class VictusIndicator extends PanelMenu.Button {
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         // Keyboard RGB Section
-        let kbdLabel = new PopupMenu.PopupMenuItem('⌨️ Keyboard RGB', { reactive: false });
-        this.menu.addMenuItem(kbdLabel);
+        this._kbdLabel = new PopupMenu.PopupMenuItem('⌨️ Keyboard RGB', { reactive: false });
+        this.menu.addMenuItem(this._kbdLabel);
 
         // Color presets
         this._colorSubMenu = new PopupMenu.PopupSubMenuMenuItem('Color: White');
         this.menu.addMenuItem(this._colorSubMenu);
 
-        const colors = [
-            { name: 'White', value: 'FFFFFF' },
-            { name: 'Red', value: 'FF0000' },
-            { name: 'Green', value: '00FF00' },
-            { name: 'Blue', value: '0000FF' },
-            { name: 'Cyan', value: '00FFFF' },
-            { name: 'Magenta', value: 'FF00FF' },
-            { name: 'Yellow', value: 'FFFF00' },
-            { name: 'Orange', value: 'FF8000' },
-            { name: 'Purple', value: '8000FF' },
-            { name: 'Off', value: '000000' }
-        ];
-
-        for (let color of colors) {
+        for (let color of COLOR_PRESETS) {
             let item = new PopupMenu.PopupMenuItem(color.name);
-            item.connect('activate', () => this._setKeyboardColor(color.value));
+            item.connect('activate', () => this._setKeyboardColor(color.hex));
             this._colorSubMenu.menu.addMenuItem(item);
         }
 
@@ -174,40 +232,44 @@ class VictusIndicator extends PanelMenu.Button {
         this._fanSpeedLabel.visible = isManual;
     }
 
-    _sendCommand(command) {
+    _setKeyboardControlsVisible(visible) {
+        this._keyboardAvailable = visible;
+        this._kbdLabel.visible = visible;
+        this._colorSubMenu.visible = visible;
+        this._kbdBrightnessItem.visible = visible;
+    }
+
+    _resetConnection() {
+        if (this._connection) {
+            try {
+                this._connection.close(null);
+            } catch (e) {
+                console.error('Victus: Failed to close backend connection:', e);
+            }
+        }
+
+        this._connection = null;
+        this._inputStream = null;
+        this._outputStream = null;
+    }
+
+    _ensureConnection() {
         return new Promise((resolve, reject) => {
             try {
+                if (this._connection && !this._connection.is_closed()) {
+                    resolve(this._connection);
+                    return;
+                }
+
                 let connection = new Gio.SocketClient();
                 let socketAddress = new Gio.UnixSocketAddress({ path: SOCKET_PATH });
 
                 connection.connect_async(socketAddress, null, (client, result) => {
                     try {
-                        let conn = client.connect_finish(result);
-                        let outputStream = conn.get_output_stream();
-                        let inputStream = conn.get_input_stream();
-
-                        // Send length-prefixed message
-                        let encoder = new TextEncoder();
-                        let cmdBytes = encoder.encode(command);
-                        let lenBytes = new Uint8Array(4);
-                        let dv = new DataView(lenBytes.buffer);
-                        dv.setUint32(0, cmdBytes.length, true); // little-endian
-
-                        outputStream.write_all(lenBytes, null);
-                        outputStream.write_all(cmdBytes, null);
-
-                        // Read response length
-                        let responseLenBytes = inputStream.read_bytes(4, null).get_data();
-                        let responseLenDv = new DataView(responseLenBytes.buffer);
-                        let responseLen = responseLenDv.getUint32(0, true);
-
-                        // Read response
-                        let responseBytes = inputStream.read_bytes(responseLen, null).get_data();
-                        let decoder = new TextDecoder();
-                        let response = decoder.decode(responseBytes);
-
-                        conn.close(null);
-                        resolve(response);
+                        this._connection = client.connect_finish(result);
+                        this._outputStream = this._connection.get_output_stream();
+                        this._inputStream = this._connection.get_input_stream();
+                        resolve(this._connection);
                     } catch (e) {
                         reject(e);
                     }
@@ -218,14 +280,45 @@ class VictusIndicator extends PanelMenu.Button {
         });
     }
 
+    _sendCommand(command) {
+        let run = async () => {
+            await this._ensureConnection();
+
+            try {
+                let encoder = new TextEncoder();
+                let cmdBytes = encoder.encode(command);
+                let lenBytes = new Uint8Array(4);
+                let dv = new DataView(lenBytes.buffer);
+                dv.setUint32(0, cmdBytes.length, true);
+
+                this._outputStream.write_all(lenBytes, null);
+                this._outputStream.write_all(cmdBytes, null);
+
+                let responseLenBytes = this._inputStream.read_bytes(4, null).get_data();
+                let responseLenDv = new DataView(responseLenBytes.buffer);
+                let responseLen = responseLenDv.getUint32(0, true);
+
+                let responseBytes = this._inputStream.read_bytes(responseLen, null).get_data();
+                let decoder = new TextDecoder();
+                return decoder.decode(responseBytes);
+            } catch (e) {
+                this._resetConnection();
+                throw e;
+            }
+        };
+
+        this._commandQueue = this._commandQueue.then(run, run);
+        return this._commandQueue;
+    }
+
     async _setFanMode(mode) {
         try {
             let response = await this._sendCommand(`SET_FAN_MODE ${mode}`);
             if (!response.startsWith('ERROR')) {
                 this._currentFanMode = mode;
-                this._fanModeSubMenu.label.text = `Mode: ${FAN_MODE_LABELS[mode]}`;
+                this._fanModeSubMenu.label.text = `Mode: ${FAN_MODE_LABELS[mode] ?? mode}`;
                 this._updateSliderVisibility();
-                Main.notify('Victus Control', `Fan mode: ${FAN_MODE_LABELS[mode]}`);
+                Main.notify('Victus Control', `Fan mode: ${FAN_MODE_LABELS[mode] ?? mode}`);
             }
         } catch (e) {
             console.error('Victus: Failed to set fan mode:', e);
@@ -233,10 +326,13 @@ class VictusIndicator extends PanelMenu.Button {
     }
 
     async _setFanSpeed(fan, value) {
-        // Map slider value (0-1) to RPM steps (0-7)
-        let step = Math.round(value * 7);
+        let targetRpm = sliderValueToRpm(value, fan === '1' ? FAN1_MAX_RPM : FAN2_MAX_RPM);
         try {
-            await this._sendCommand(`SET_FAN_SPEED ${fan} ${step}`);
+            let response = await this._sendCommand(`SET_FAN_SPEED ${fan} ${targetRpm}`);
+            if (!response.startsWith('ERROR')) {
+                this._currentFanSpeed[fan === '1' ? 0 : 1] = `${targetRpm}`;
+                this._rpmItem.label.text = `💨 Fan: ${this._currentFanSpeed[0]} / ${this._currentFanSpeed[1]} RPM`;
+            }
         } catch (e) {
             console.error('Victus: Failed to set fan speed:', e);
         }
@@ -247,7 +343,7 @@ class VictusIndicator extends PanelMenu.Button {
             GLib.source_remove(this._fan1SliderDebounce);
 
         this._fan1SliderDebounce = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
-            this._setFanSpeed(0, this._fan1Slider.value);
+            this._setFanSpeed('1', this._fan1Slider.value);
             this._fan1SliderDebounce = null;
             return GLib.SOURCE_REMOVE;
         });
@@ -258,18 +354,24 @@ class VictusIndicator extends PanelMenu.Button {
             GLib.source_remove(this._fan2SliderDebounce);
 
         this._fan2SliderDebounce = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
-            this._setFanSpeed(1, this._fan2Slider.value);
+            this._setFanSpeed('2', this._fan2Slider.value);
             this._fan2SliderDebounce = null;
             return GLib.SOURCE_REMOVE;
         });
     }
 
     async _setKeyboardColor(hexColor) {
+        let rgbColor = hexToRgbTriplet(hexColor);
+        if (!rgbColor)
+            return;
+
         try {
-            let response = await this._sendCommand(`SET_KEYBOARD_COLOR ${hexColor}`);
+            let response = await this._sendCommand(`SET_KEYBOARD_COLOR ${rgbColor}`);
             if (!response.startsWith('ERROR')) {
-                this._currentKeyboardColor = hexColor;
-                Main.notify('Victus Control', `Keyboard color set`);
+                this._currentKeyboardColor = hexColor.replace(/^#/, '').toUpperCase();
+                this._colorSubMenu.label.text = `Color: ${colorNameForHex(this._currentKeyboardColor)}`;
+                this._setKeyboardControlsVisible(true);
+                Main.notify('Victus Control', `Keyboard color: ${colorNameForHex(this._currentKeyboardColor)}`);
             }
         } catch (e) {
             console.error('Victus: Failed to set keyboard color:', e);
@@ -281,7 +383,7 @@ class VictusIndicator extends PanelMenu.Button {
             GLib.source_remove(this._kbdBrightnessDebounce);
 
         this._kbdBrightnessDebounce = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
-            this._setKeyboardBrightness(Math.round(this._kbdBrightnessSlider.value * 100));
+            this._setKeyboardBrightness(Math.round(this._kbdBrightnessSlider.value * 255));
             this._kbdBrightnessDebounce = null;
             return GLib.SOURCE_REMOVE;
         });
@@ -289,13 +391,48 @@ class VictusIndicator extends PanelMenu.Button {
 
     async _setKeyboardBrightness(value) {
         try {
-            await this._sendCommand(`SET_KBD_BRIGHTNESS ${value}`);
+            let response = await this._sendCommand(`SET_KBD_BRIGHTNESS ${clamp(value, 0, 255)}`);
+            if (!response.startsWith('ERROR')) {
+                this._currentKeyboardBrightness = clamp(value, 0, 255);
+                this._setKeyboardControlsVisible(true);
+            }
         } catch (e) {
             console.error('Victus: Failed to set keyboard brightness:', e);
         }
     }
 
+    async _refreshKeyboardState() {
+        try {
+            let brightnessResponse = await this._sendCommand('GET_KBD_BRIGHTNESS');
+            if (brightnessResponse.startsWith('ERROR')) {
+                this._setKeyboardControlsVisible(false);
+                return;
+            }
+
+            let brightness = Number.parseInt(brightnessResponse.trim(), 10);
+            if (!Number.isNaN(brightness)) {
+                this._currentKeyboardBrightness = clamp(brightness, 0, 255);
+                this._kbdBrightnessSlider.value = this._currentKeyboardBrightness / 255;
+            }
+
+            let colorResponse = await this._sendCommand('GET_KEYBOARD_COLOR');
+            if (!colorResponse.startsWith('ERROR')) {
+                let hexColor = rgbTripletToHex(colorResponse);
+                if (hexColor) {
+                    this._currentKeyboardColor = hexColor;
+                    this._colorSubMenu.label.text = `Color: ${colorNameForHex(hexColor)}`;
+                }
+            }
+
+            this._setKeyboardControlsVisible(true);
+        } catch (e) {
+            console.error('Victus: Failed to refresh keyboard state:', e);
+            this._setKeyboardControlsVisible(false);
+        }
+    }
+
     _startStatusUpdates() {
+        this._refreshKeyboardState();
         this._updateStatus();
         this._updateTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 3, () => {
             this._updateStatus();
@@ -313,14 +450,12 @@ class VictusIndicator extends PanelMenu.Button {
                 this._updateSliderVisibility();
             }
 
-            // Get fan speed/RPM
-            let speedResponse = await this._sendCommand('GET_FAN_SPEED');
-            if (!speedResponse.startsWith('ERROR')) {
-                // Parse response like "2500 3000" (RPM values)
-                let parts = speedResponse.trim().split(' ');
-                if (parts.length >= 2) {
-                    this._rpmItem.label.text = `💨 Fan: ${parts[0]} / ${parts[1]} RPM`;
-                }
+            // Get fan speed/RPM per fan
+            let fan1Response = await this._sendCommand('GET_FAN_SPEED 1');
+            let fan2Response = await this._sendCommand('GET_FAN_SPEED 2');
+            if (!fan1Response.startsWith('ERROR') && !fan2Response.startsWith('ERROR')) {
+                this._currentFanSpeed = [fan1Response.trim(), fan2Response.trim()];
+                this._rpmItem.label.text = `💨 Fan: ${this._currentFanSpeed[0]} / ${this._currentFanSpeed[1]} RPM`;
             }
 
             // Get CPU temp (from sysfs)
@@ -360,6 +495,7 @@ class VictusIndicator extends PanelMenu.Button {
         if (this._kbdBrightnessDebounce)
             GLib.source_remove(this._kbdBrightnessDebounce);
 
+        this._resetConnection();
         super.destroy();
     }
 }
