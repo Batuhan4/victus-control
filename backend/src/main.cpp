@@ -93,6 +93,10 @@ static std::string normalize_mode(std::string mode) {
   return mode;
 }
 
+static bool is_valid_fan_number(const std::string &fan_num) {
+  return fan_num == "1" || fan_num == "2";
+}
+
 void handle_command(const std::string &command_str, int client_socket) {
   std::stringstream ss(command_str);
   std::string command;
@@ -103,12 +107,16 @@ void handle_command(const std::string &command_str, int client_socket) {
   if (command == "GET_FAN_SPEED") {
     std::string fan_num;
     ss >> fan_num;
-    response = get_fan_speed(fan_num);
+    if (!is_valid_fan_number(fan_num)) {
+      response = "ERROR: Invalid fan number";
+    } else {
+      response = get_fan_speed(fan_num);
+    }
   } else if (command == "SET_FAN_SPEED") {
     std::string fan_num;
     std::string speed;
     ss >> fan_num >> speed;
-    if (!fan_num.empty() && !speed.empty()) {
+    if (!fan_num.empty() && !speed.empty() && is_valid_fan_number(fan_num)) {
       response =
           set_fan_speed(fan_num, speed, true,
                         true); // true = allow triggering fan_mode_trigger
