@@ -1,10 +1,15 @@
 #include <array>
+#include <cctype>
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <vector>
 
 #include "keyboard.hpp"
@@ -108,33 +113,46 @@ std::string read_text_file(const std::string &path) {
   return trim_trailing_whitespace(buffer.str());
 }
 
+bool is_valid_hex_color(const std::string &hex) {
+  if (hex.size() != 6)
+    return false;
+  for (char c : hex) {
+    if (!std::isxdigit(static_cast<unsigned char>(c)))
+      return false;
+  }
+  return true;
+}
+
 std::string write_rgb_zone_with_helper(int zone, const std::string &hex_color) {
-  std::string cmd = "sudo ";
-  cmd += kRgbZoneWriterPath;
-  cmd += " ";
-  cmd += std::to_string(zone);
-  cmd += " ";
-  cmd += hex_color;
-  cmd += " 2>&1";
+  if (zone < 0 || zone > 3)
+    return "ERROR: Invalid zone number";
 
-  FILE *pipe = popen(cmd.c_str(), "r");
-  if (!pipe)
-    return "ERROR: Failed to execute helper script";
+  if (!is_valid_hex_color(hex_color))
+    return "ERROR: Invalid hex color value";
 
-  char buffer[256];
-  std::string result;
-  while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
-    result += buffer;
+  std::string zone_str = std::to_string(zone);
 
-  int ret = pclose(pipe);
-  if (ret == 0)
+  pid_t pid = fork();
+  if (pid == -1)
+    return "ERROR: Failed to fork helper process";
+
+  if (pid == 0) {
+    const char *argv[] = {"sudo", kRgbZoneWriterPath, zone_str.c_str(),
+                          hex_color.c_str(), nullptr};
+    execvp("sudo", const_cast<char *const *>(argv));
+    _exit(127);
+  }
+
+  int status = 0;
+  while (waitpid(pid, &status, 0) == -1) {
+    if (errno != EINTR)
+      return "ERROR: Failed waiting for helper process";
+  }
+
+  if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
     return "OK";
 
-  result = trim_trailing_whitespace(result);
-  if (result.empty())
-    result = "Failed to set zone color";
-
-  return "ERROR: " + result;
+  return "ERROR: Failed to set zone color";
 }
 
 std::string fourzone_brightness_value() {
@@ -166,9 +184,8 @@ std::string get_keyboard_color() {
       return hex_to_rgb_string(hex_val);
   }
 
-  std::ifstream rgb(kSingleZoneColorPath);
-  if (rgb) {
-    std::string rgb_mode = read_text_file(kSingleZoneColorPath);
+  std::string rgb_mode = read_text_file(kSingleZoneColorPath);
+  if (!rgb_mode.empty()) {
     return rgb_mode;
   }
 

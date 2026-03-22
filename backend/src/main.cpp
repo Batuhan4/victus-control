@@ -1,6 +1,6 @@
-#include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <csignal>
 #include <cstdint>
 #include <iostream>
 #include <sstream>
@@ -8,6 +8,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -18,6 +19,15 @@
 #define SOCKET_PATH SOCKET_DIR "/victus_backend.sock"
 
 static std::atomic<int> active_clients{0};
+static std::atomic<bool> server_running{true};
+static int g_server_socket = -1;
+
+static void signal_handler(int sig) {
+  server_running.store(false, std::memory_order_release);
+  if (g_server_socket >= 0) {
+    shutdown(g_server_socket, SHUT_RDWR);
+  }
+}
 
 static void on_client_connected() {
   int current = active_clients.fetch_add(1) + 1;
@@ -184,8 +194,41 @@ void handle_command(const std::string &command_str, int client_socket) {
     return;
 }
 
+static void handle_client(int client_socket) {
+  on_client_connected();
+
+  while (server_running.load(std::memory_order_acquire)) {
+    uint32_t cmd_len;
+    if (!read_all(client_socket, &cmd_len, sizeof(cmd_len))) {
+      break;
+    }
+
+    if (cmd_len > 1024) {
+      std::cerr << "Command too long (" << cmd_len << " bytes). Closing connection.\n";
+      break;
+    }
+
+    std::vector<char> buffer(cmd_len);
+    if (!read_all(client_socket, buffer.data(), cmd_len)) {
+      break;
+    }
+
+    handle_command(std::string(buffer.begin(), buffer.end()), client_socket);
+  }
+
+  close(client_socket);
+  on_client_disconnected();
+}
+
 int main() {
-  int server_socket, client_socket;
+  struct sigaction sa = {};
+  sa.sa_handler = signal_handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigaction(SIGTERM, &sa, nullptr);
+  sigaction(SIGINT, &sa, nullptr);
+
+  int server_socket;
   struct sockaddr_un server_addr;
 
   unlink(SOCKET_PATH);
@@ -195,6 +238,7 @@ int main() {
     std::cerr << "Error creating socket: " << strerror(errno) << std::endl;
     return 1;
   }
+  g_server_socket = server_socket;
 
   memset(&server_addr, 0, sizeof(server_addr));
   server_addr.sun_family = AF_UNIX;
@@ -228,42 +272,21 @@ int main() {
               << std::endl;
   }
 
-  while (true) {
-    client_socket = accept(server_socket, nullptr, nullptr);
+  while (server_running.load(std::memory_order_acquire)) {
+    int client_socket = accept(server_socket, nullptr, nullptr);
     if (client_socket < 0) {
+      if (!server_running.load(std::memory_order_acquire)) {
+        break;
+      }
       perror("accept");
       continue;
     }
 
-    on_client_connected();
-
-    while (true) {
-      uint32_t cmd_len;
-      if (!read_all(client_socket, &cmd_len, sizeof(cmd_len))) {
-        std::cerr << "Client disconnected or error occurred while reading "
-                     "command length.\n";
-        break;
-      }
-
-      if (cmd_len > 1024) { // Basic sanity check
-        std::cerr << "Command too long. Closing connection.\n";
-        break;
-      }
-
-      std::vector<char> buffer(cmd_len);
-      if (!read_all(client_socket, buffer.data(), cmd_len)) {
-        std::cerr
-            << "Client disconnected or error occurred while reading command.\n";
-        break;
-      }
-
-      handle_command(std::string(buffer.begin(), buffer.end()), client_socket);
-    }
-
-    close(client_socket);
-    on_client_disconnected();
+    std::thread(handle_client, client_socket).detach();
   }
 
   close(server_socket);
+  unlink(SOCKET_PATH);
+  std::cout << "Server shut down." << std::endl;
   return 0;
 }
