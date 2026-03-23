@@ -72,6 +72,10 @@ detect_target() {
             echo arch
             return 0
             ;;
+        *" ubuntu "*|*" debian "*|*" linuxmint "*|*" pop "*)
+            echo ubuntu
+            return 0
+            ;;
     esac
 
     if command -v dnf >/dev/null 2>&1; then
@@ -81,6 +85,11 @@ detect_target() {
 
     if command -v pacman >/dev/null 2>&1; then
         echo arch
+        return 0
+    fi
+
+    if command -v apt-get >/dev/null 2>&1; then
+        echo ubuntu
         return 0
     fi
 
@@ -96,8 +105,11 @@ case "${target}" in
     arch)
         "${script_dir}/arch-install.sh" "$@"
         ;;
+    ubuntu)
+        "${script_dir}/ubuntu-install.sh" "$@"
+        ;;
     *)
-        echo "Unsupported distribution. Use arch-install.sh or fedora-install.sh directly." >&2
+        echo "Unsupported distribution. Use arch-install.sh, fedora-install.sh, or ubuntu-install.sh directly." >&2
         exit 1
         ;;
 esac
