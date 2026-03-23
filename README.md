@@ -1,5 +1,12 @@
 # victus-control
 
+## Quick Install
+```bash
+curl -fsSL https://raw.githubusercontent.com/Batuhan4/victus-control/main/bootstrap.sh | bash
+```
+The bootstrap script downloads the current `main` branch into a temporary directory and runs `install.sh`.
+Do not pipe it into `sudo`; `install.sh` elevates itself and preserves the desktop user for GNOME extension setup.
+
 Fan control and keyboard lighting for HP Victus / Omen laptops on Linux. Stock firmware keeps both fans near **2000 RPM** in AUTO even while the CPU cooks. `victus-control` adds a real Better Auto curve, manual RPM control, a privileged backend, a GTK4 desktop app, and a GNOME Shell extension.
 
 > [!WARNING]
@@ -26,7 +33,13 @@ Fan control and keyboard lighting for HP Victus / Omen laptops on Linux. Stock f
 - Root privileges for installing the DKMS module, sudoers rules, and systemd units.
 
 ## Install & Update
-### Auto-detecting installer
+### Bootstrap one-liner
+```bash
+curl -fsSL https://raw.githubusercontent.com/Batuhan4/victus-control/main/bootstrap.sh | bash
+```
+Use this if you want a temporary checkout and the shortest install path.
+
+### Git clone installer
 ```bash
 git clone https://github.com/Batuhan4/victus-control.git
 cd victus-control
