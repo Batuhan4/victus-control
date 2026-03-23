@@ -1,4 +1,7 @@
 datadir = join_paths(get_option('prefix'), get_option('datadir'))
+applicationsdir = join_paths(datadir, 'applications')
+iconscalabledir = join_paths(datadir, 'icons', 'hicolor', 'scalable', 'apps')
+pixmapsdir = join_paths(datadir, 'pixmaps')
 
 executable('victus-control',
   sources: ['src/main.cpp', 'src/keyboard.cpp', 'src/fan.cpp', 'src/about.cpp', 'src/socket.cpp'],
@@ -9,10 +12,15 @@ executable('victus-control',
 
 install_data(
 	'victus-control.desktop',
-	install_dir: '/usr/share/applications'
+	install_dir: applicationsdir
 )
 
 install_data(
-	'victus-icon.svg', 
-	install_dir: join_paths(get_option('prefix'), 'share', 'icons', 'hicolor', '48x48', 'apps')
+	'victus-icon.svg',
+	install_dir: iconscalabledir
+)
+
+install_data(
+	'victus-icon.svg',
+	install_dir: pixmapsdir
 )
