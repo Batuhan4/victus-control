@@ -42,8 +42,13 @@ reload_patched_hp_wmi() {
     echo "--> Reloading patched hp-wmi module..."
     modprobe led_class_multicolor >/dev/null 2>&1 || true
 
-    if ! modprobe --show-depends hp_wmi | grep -q '/extra/hp-wmi\.ko'; then
-        echo "Error: modprobe hp_wmi is not resolving to the DKMS-installed module in /extra." >&2
+    local module_path="/extra/hp-wmi\.ko"
+    if grep -q '^ID=cachyos' /etc/os-release 2>/dev/null; then
+        module_path="/updates/.*hp-wmi\.ko\.zst"
+    fi
+
+    if ! modprobe --show-depends hp_wmi | grep -E -q "$module_path"; then
+        echo "Error: modprobe hp_wmi is not resolving to the DKMS-installed module (checked $module_path)." >&2
         return 1
     fi
 

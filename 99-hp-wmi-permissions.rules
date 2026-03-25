@@ -7,3 +7,5 @@ SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", GROUP="victus", MODE="0664"
 SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", ACTION=="add|change", RUN+="/usr/bin/sh -c '/usr/bin/chgrp victus /sys%p/pwm1_enable /sys%p/fan1_target /sys%p/fan2_target 2>/dev/null; /usr/bin/chmod g+w /sys%p/pwm1_enable /sys%p/fan1_target /sys%p/fan2_target 2>/dev/null'"
 
 SUBSYSTEM=="leds", KERNEL=="hp::kbd_backlight", ACTION=="add|change", RUN+="/usr/bin/sh -c '/usr/bin/chgrp victus /sys%p/brightness /sys%p/multi_intensity 2>/dev/null; /usr/bin/chmod g+w /sys%p/brightness /sys%p/multi_intensity 2>/dev/null'"
+
+SUBSYSTEM=="platform", KERNEL=="hp-wmi", ACTION=="add|change", RUN+="/usr/bin/sh -c '/usr/bin/chgrp -R victus /sys/devices/platform/hp-wmi/rgb_zones 2>/dev/null; /usr/bin/chmod -R g+rw /sys/devices/platform/hp-wmi/rgb_zones 2>/dev/null'"
