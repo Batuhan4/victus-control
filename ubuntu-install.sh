@@ -15,18 +15,15 @@ module_version="0.0.2"
 
 verify_hp_wmi_fan_interface() {
     local hwmon_path
-
     hwmon_path="$(find /sys/devices/platform/hp-wmi/hwmon -mindepth 1 -maxdepth 1 -type d -name 'hwmon*' | head -n 1 || true)"
     if [[ -z "${hwmon_path}" ]]; then
         echo "Error: hp_wmi hwmon directory not found." >&2
         return 1
     fi
-
     if [[ ! -e "${hwmon_path}/fan1_target" || ! -e "${hwmon_path}/fan2_target" ]]; then
         echo "Error: Patched hp_wmi fan target controls are missing under ${hwmon_path}." >&2
         return 1
     fi
-
     return 0
 }
 
@@ -86,30 +83,23 @@ reload_patched_hp_wmi() {
     done
 
     warn_if_keyboard_interface_missing
-
     return 0
 }
 
-install_fedora_dependencies() {
+install_ubuntu_dependencies() {
     local current_kernel
-    local packages=(
-        meson
-        ninja-build
-        gtk4-devel
-        git
-        dkms
-        gcc-c++
-        policycoreutils-python-utils
-        sudo
-    )
-
-    dnf install -y "${packages[@]}"
-
     current_kernel="$(uname -r)"
-    if ! dnf install -y "kernel-devel-${current_kernel}"; then
-        echo "Warning: Could not install kernel-devel-${current_kernel}; falling back to kernel-devel." >&2
-        dnf install -y kernel-devel
-    fi
+
+    apt-get update -q
+    apt-get install -y \
+        meson \
+        ninja-build \
+        libgtk-4-dev \
+        git \
+        dkms \
+        g++ \
+        sudo \
+        "linux-headers-${current_kernel}"
 }
 
 ensure_users_and_groups() {
@@ -204,15 +194,8 @@ build_and_install_app() {
     fi
 }
 
-install_fedora_udev_rules() {
-    echo "--> Installing Fedora-specific udev rules..."
-    install -m 0644 99-hp-wmi-permissions.rules /etc/udev/rules.d/99-hp-wmi-permissions.rules
-    rm -f /etc/udev/rules.d/victus-control.rules
-}
-
 start_services() {
     echo "--> Configuring and starting backend service..."
-
     systemd-tmpfiles --create || echo "Warning: Failed to create tmpfiles, continuing..."
     systemctl daemon-reload
     udevadm control --reload-rules
@@ -225,21 +208,14 @@ start_services() {
     systemctl is-active --quiet victus-backend.service
 }
 
-echo "--- Starting Victus Control Installation (Fedora) ---"
+echo "--- Starting Victus Control Installation (Ubuntu) ---"
 echo "--> Installing required packages..."
-install_fedora_dependencies
+install_ubuntu_dependencies
 ensure_users_and_groups
 install_helpers_and_sudoers
 install_hp_wmi_dkms
 build_and_install_app
-install_fedora_udev_rules
 start_services
-
-if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce)" == "Enforcing" ]]; then
-    echo
-    echo "SELinux is enforcing. That configuration was validated for basic fan control on Fedora,"
-    echo "but if you see permission denials, check 'journalctl -t setroubleshoot' and 'ausearch -m avc'."
-fi
 
 echo
 echo "--- Installation Complete! ---"

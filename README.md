@@ -19,16 +19,17 @@ Fan control and keyboard lighting for HP Victus / Omen laptops on Linux. Stock f
 - **GNOME Shell integration** exposes fan and keyboard controls from the top panel.
 
 ## Support Matrix
-- **Main installer**: Arch-based distros and Fedora.
+- **Main installer**: Arch-based distros, Fedora, and Ubuntu/Debian-based distros.
 - **Desktop app**: GTK4 app installed by the main project installer.
 - **GNOME Shell extension**: supported on GNOME Shell 45+ and auto-installed by `install.sh` when GNOME is present.
-- **Ubuntu GNOME**: the extension should work on GNOME-based Ubuntu setups if `victus-backend.service` is already installed and reachable, but the project does not currently ship a full Ubuntu installer.
+- **Ubuntu / Debian**: contributor-tested on Ubuntu 24.04 LTS (GNOME 46). Other Debian-based distros use the same installer path but are less tested.
 
 ## System Requirements
 - 64-bit Linux with `systemd`.
 - Supported installer targets:
   - Arch-based distros via `pacman`
   - Fedora via `dnf`
+  - Ubuntu/Debian-based distros via `apt-get`
 - GNOME Shell 45+ if you want the panel extension.
 - Root privileges for installing the DKMS module, sudoers rules, and systemd units.
 
@@ -45,13 +46,18 @@ git clone https://github.com/Batuhan4/victus-control.git
 cd victus-control
 sudo ./install.sh
 ```
-The wrapper routes to `arch-install.sh` or `fedora-install.sh` based on your OS.
+The wrapper routes to `arch-install.sh`, `fedora-install.sh`, or `ubuntu-install.sh` based on your OS.
 On GNOME systems, it also installs the panel extension for the desktop user automatically.
 
 ### Fedora notes
 - Validated by contributors on `HP Victus 16-S0046NT` with Fedora 43.
 - The Fedora installer now verifies that the patched `hp_wmi` module is actually active before starting the backend.
 - If you recently updated the kernel, reboot first so the running kernel matches the installed `kernel-devel` package.
+
+### Ubuntu / Debian notes
+- Contributor-tested on Ubuntu 24.04 LTS (GNOME 46) with an HP Victus 16.
+- The installer accepts DKMS-managed `hp_wmi` module layouts used by both `/extra` and `/updates/dkms`.
+- Secure Boot can block the DKMS module from loading. If install succeeds but `hp_wmi` still does not load, enroll the MOK key with `sudo mokutil --import /var/lib/shim-signed/mok/MOK.der` or disable Secure Boot, then reboot.
 
 The installer handles dependency install, user/group creation, DKMS module registration, build + install, and restarts `victus-backend.service`. Log out/in afterwards so your user joins the `victus` group.
 

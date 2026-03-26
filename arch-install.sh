@@ -36,14 +36,38 @@ warn_if_keyboard_interface_missing() {
     fi
 }
 
+resolve_hp_wmi_module_path() {
+    modprobe --show-depends hp_wmi 2>/dev/null \
+        | awk '$1 == "insmod" && $2 ~ /\/hp-wmi\.ko($|\.(gz|xz|zst)$)/ { print $2 }' \
+        | tail -n 1
+}
+
+hp_wmi_module_path_is_dkms() {
+    local module_path="${1:-}"
+
+    case "${module_path}" in
+        */extra/hp-wmi.ko|*/extra/hp-wmi.ko.*|*/updates/hp-wmi.ko|*/updates/hp-wmi.ko.*|*/updates/dkms/hp-wmi.ko|*/updates/dkms/hp-wmi.ko.*)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
 reload_patched_hp_wmi() {
     local attempts=0
+    local module_path=""
 
     echo "--> Reloading patched hp-wmi module..."
     modprobe led_class_multicolor >/dev/null 2>&1 || true
 
-    if ! modprobe --show-depends hp_wmi | grep -q '/extra/hp-wmi\.ko'; then
-        echo "Error: modprobe hp_wmi is not resolving to the DKMS-installed module in /extra." >&2
+    module_path="$(resolve_hp_wmi_module_path || true)"
+    if ! hp_wmi_module_path_is_dkms "${module_path}"; then
+        if [[ -n "${module_path}" ]]; then
+            echo "Error: modprobe hp_wmi resolved to an unexpected module path: ${module_path}" >&2
+        else
+            echo "Error: Unable to determine which hp_wmi module modprobe would load." >&2
+        fi
         return 1
     fi
 
@@ -67,7 +91,7 @@ reload_patched_hp_wmi() {
 }
 
 install_arch_dependencies() {
-    local packages=(meson ninja gtk4 git dkms)
+    local packages=(meson ninja gtk4 git dkms sudo)
     declare -A header_packages=()
     local module_dir=""
     local pkgbase_path=""
