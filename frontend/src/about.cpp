@@ -4,7 +4,7 @@
 
 VictusAbout::VictusAbout()
 {
-	static const char *authors[] = {"betelqeyza", "Batuhan4", nullptr};
+	static const char *authors[] = {"betelqeyza", "Batuhan4", "hemangjoshi37a", nullptr};
 
 	about_dialog = gtk_about_dialog_new();
 
