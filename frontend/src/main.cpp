@@ -15,7 +15,7 @@ class VictusControl
 {
 public:
 	GtkWidget *window;
-	GtkWidget *notebook;
+	GtkWidget *dashboard;
 	GtkWidget *menu_button;
 	GtkWidget *menu;
 
@@ -32,14 +32,24 @@ public:
 
 		window = gtk_window_new();
 		gtk_window_set_title(GTK_WINDOW(window), "VICTUS CONTROL");
-		gtk_window_set_default_size(GTK_WINDOW(window), 880, 820);
+		gtk_window_set_default_size(GTK_WINDOW(window), 900, 900);
 
-		notebook = gtk_notebook_new();
-		gtk_widget_set_hexpand(notebook, TRUE);
-		gtk_widget_set_vexpand(notebook, TRUE);
-		gtk_window_set_child(GTK_WINDOW(window), notebook);
+		// One page with a card per subsystem, rather than tabs: both the
+		// keyboard and the fans are visible at once, which is the point of a
+		// control panel you glance at.
+		dashboard = gtk_box_new(GTK_ORIENTATION_VERTICAL, 18);
+		gtk_widget_set_margin_top(dashboard, 18);
+		gtk_widget_set_margin_bottom(dashboard, 18);
+		gtk_widget_set_margin_start(dashboard, 18);
+		gtk_widget_set_margin_end(dashboard, 18);
 
-		add_tabs();
+		GtkWidget *scroller = gtk_scrolled_window_new();
+		gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller),
+			GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+		gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), dashboard);
+		gtk_window_set_child(GTK_WINDOW(window), scroller);
+
+		add_cards();
 		add_menu();
 	}
 
@@ -47,35 +57,16 @@ public:
 	{
 	}
 
-	void add_tabs()
+	void add_cards()
 	{
-		// Wrap each page so a short window scrolls instead of clipping the
-		// bottom controls off.
-		auto wrap = [](GtkWidget *page) {
-			GtkWidget *scroller = gtk_scrolled_window_new();
-			gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller),
-				GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-			gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), page);
-			gtk_widget_set_vexpand(scroller, TRUE);
-			return scroller;
-		};
+		GtkWidget *keyboard_page = keyboard_control->get_page();
+		GtkWidget *fan_page = fan_control->get_page();
 
-		GtkWidget *keyboard_page = wrap(keyboard_control->get_page());
-		GtkWidget *fan_page = wrap(fan_control->get_page());
+		gtk_widget_add_css_class(keyboard_page, "victus-card");
+		gtk_widget_add_css_class(fan_page, "victus-card");
 
-		auto tab_label = [](const char *text, const char *icon_name) {
-			GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-			GtkWidget *icon = gtk_image_new_from_icon_name(icon_name);
-			gtk_box_append(GTK_BOX(box), icon);
-			gtk_box_append(GTK_BOX(box), gtk_label_new(text));
-			return box;
-		};
-
-		GtkWidget *label_keyboard = tab_label("LIGHTING", "input-keyboard-symbolic");
-		GtkWidget *label_fan = tab_label("COOLING", "weather-windy-symbolic");
-
-		gtk_notebook_append_page(GTK_NOTEBOOK(notebook), keyboard_page, label_keyboard);
-		gtk_notebook_append_page(GTK_NOTEBOOK(notebook), fan_page, label_fan);
+		gtk_box_append(GTK_BOX(dashboard), keyboard_page);
+		gtk_box_append(GTK_BOX(dashboard), fan_page);
 	}
 
 	void add_menu()

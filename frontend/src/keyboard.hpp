@@ -17,11 +17,12 @@ public:
   GtkWidget *get_page();
 
 private:
-  GtkWidget *toggle_button;
+  // Material-style on/off for the backlight, top right of the card.
+  GtkWidget *power_switch;
   GtkWidget *color_button;
+  GtkWidget *colour_row;   // only shown while the SOLID style is selected
   GdkRGBA current_single_color;
   GtkWidget *zone_selector;
-  GtkWidget *apply_button;
   GtkLabel *current_color_label;
   GtkLabel *current_state_label;
 
@@ -33,6 +34,10 @@ private:
   GtkColorDialog *zone_choosers[4];
 
   // Lighting effects (animated colour)
+  // One radio per style. FLOW is only created on four-zone boards, where
+  // there is geometry for the colour to travel across.
+  GtkWidget *style_radios[4];
+  int style_count;
   GtkWidget *effect_dropdown;
   GtkWidget *effect_speed_scale;
   GtkWidget *effect_speed_row;
@@ -71,6 +76,9 @@ private:
   void apply_current_effect();
   void refresh_effect_from_device();
   void set_effect_controls_sensitive(bool sensitive);
+  // Shows the colour picker only for SOLID and the speed slider only for the
+  // animated styles, so the card never offers a control that does nothing.
+  void update_control_visibility();
   void start_preview_animation();
   void stop_preview_animation();
   void apply_preset(const std::string &preset_name);
@@ -91,6 +99,8 @@ private:
   static void on_preset_changed(GtkComboBoxText *widget, gpointer data);
   static void on_effect_changed(GObject *dropdown, GParamSpec *pspec,
                                 gpointer data);
+  static void on_style_toggled(GtkCheckButton *button, gpointer data);
+  static void on_power_switched(GObject *sw, GParamSpec *pspec, gpointer data);
   static void on_effect_speed_changed(GtkRange *range, gpointer data);
   static gboolean on_preview_tick(gpointer data);
   static void on_save_preset_clicked(GtkWidget *widget, gpointer data);

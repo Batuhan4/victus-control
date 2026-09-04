@@ -16,9 +16,9 @@ namespace {
 constexpr int kFourZoneCount = 4;
 constexpr int kKeyboardRows = 4;
 constexpr int kKeyboardColumns = 16;
-constexpr int kKeyWidth = 20;
-constexpr int kKeyHeight = 20;
-constexpr int kKeySpacing = 3;
+constexpr int kKeyWidth = 24;
+constexpr int kKeyHeight = 24;
+constexpr int kKeySpacing = 4;
 
 bool parse_rgb_triplet(const std::string &rgb_string, GdkRGBA *color) {
   std::stringstream ss(rgb_string);
@@ -333,111 +333,67 @@ GtkWidget *make_field_label(const char *text) {
 } // namespace
 
 void VictusKeyboardControl::build_ui_for_keyboard_type() {
-  // Toggle button (common for both types)
-  toggle_button = gtk_button_new_with_label("BACKLIGHT: OFF");
-  gtk_widget_add_css_class(toggle_button, "power-toggle");
-  gtk_widget_add_css_class(toggle_button, "is-off");
-  gtk_box_append(GTK_BOX(keyboard_page), toggle_button);
-  g_signal_connect(toggle_button, "clicked", G_CALLBACK(on_toggle_clicked),
-                   this);
+  // Header: title on the left, backlight switch on the right.
+  GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+  GtkWidget *header_icon =
+      gtk_image_new_from_icon_name("input-keyboard-symbolic");
+  gtk_widget_add_css_class(header_icon, "section-icon");
+  GtkWidget *header_label = gtk_label_new("KEYBOARD LIGHTING");
+  gtk_widget_add_css_class(header_label, "section-title");
 
-  // Build different UI based on keyboard type
+  GtkWidget *header_spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  gtk_widget_set_hexpand(header_spacer, TRUE);
+
+  power_switch = gtk_switch_new();
+  gtk_widget_set_valign(power_switch, GTK_ALIGN_CENTER);
+  gtk_widget_add_css_class(power_switch, "power-switch");
+  g_signal_connect(power_switch, "notify::active",
+                   G_CALLBACK(on_power_switched), this);
+
+  gtk_box_append(GTK_BOX(header), header_icon);
+  gtk_box_append(GTK_BOX(header), header_label);
+  gtk_box_append(GTK_BOX(header), header_spacer);
+  gtk_box_append(GTK_BOX(header), power_switch);
+  gtk_box_append(GTK_BOX(keyboard_page), header);
+
+  // The preview is the centrepiece of the card, so it goes directly under the
+  // header and gets the room to be read at a glance.
+  keyboard_visual = gtk_drawing_area_new();
+  gtk_widget_set_size_request(keyboard_visual, 500, 150);
+  gtk_widget_set_halign(keyboard_visual, GTK_ALIGN_CENTER);
+  gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(keyboard_visual),
+                                 (GtkDrawingAreaDrawFunc)draw_keyboard_visual,
+                                 this, nullptr);
+  gtk_box_append(GTK_BOX(keyboard_page), keyboard_visual);
+
+  current_single_color = {1.0f, 1.0f, 1.0f, 1.0f};
+
   if (keyboard_type == "FOUR_ZONE") {
-    // Preset dropdown
-    preset_dropdown = gtk_combo_box_text_new();
-    for (const auto &preset : presets) {
-      gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(preset_dropdown),
-                                     preset.first.c_str());
-    }
-    gtk_combo_box_set_active(GTK_COMBO_BOX(preset_dropdown), 0);
-
-    GtkWidget *preset_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-    GtkWidget *preset_label = gtk_label_new("Preset:");
-    gtk_box_append(GTK_BOX(preset_box), preset_label);
-    gtk_box_append(GTK_BOX(preset_box), preset_dropdown);
-    gtk_box_append(GTK_BOX(keyboard_page), preset_box);
-
-    g_signal_connect(preset_dropdown, "changed", G_CALLBACK(on_preset_changed),
-                     this);
-
-    // Save and Remove preset buttons
-    GtkWidget *save_button = gtk_button_new_with_label("Save Preset");
-    GtkWidget *remove_button = gtk_button_new_with_label("Remove Preset");
-    gtk_box_append(GTK_BOX(preset_box), save_button);
-    gtk_box_append(GTK_BOX(preset_box), remove_button);
-    g_signal_connect(save_button, "clicked", G_CALLBACK(on_save_preset_clicked),
-                     this);
-    g_signal_connect(remove_button, "clicked",
-                     G_CALLBACK(on_remove_preset_clicked), this);
-
-    // Interactive virtual keyboard visualization
-    keyboard_visual = gtk_drawing_area_new();
-    gtk_widget_set_size_request(keyboard_visual, 400, 120);
-    gtk_widget_set_halign(keyboard_visual,
-                          GTK_ALIGN_CENTER); // Center horizontally
-    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(keyboard_visual),
-                                   (GtkDrawingAreaDrawFunc)draw_keyboard_visual,
-                                   this, nullptr);
-    gtk_box_append(GTK_BOX(keyboard_page), keyboard_visual);
-
-    // Add motion controller for hover effects
+    // Per-zone editing: hover to highlight, click to recolour that zone.
     GtkEventController *motion_controller = gtk_event_controller_motion_new();
     g_signal_connect(motion_controller, "motion",
                      G_CALLBACK(on_keyboard_motion), this);
     gtk_widget_add_controller(keyboard_visual, motion_controller);
 
-    // Add click gesture for zone selection
     click_gesture = gtk_gesture_click_new();
     g_signal_connect(click_gesture, "pressed", G_CALLBACK(on_keyboard_click),
                      this);
     gtk_widget_add_controller(keyboard_visual,
                               GTK_EVENT_CONTROLLER(click_gesture));
 
-    // Info label
     GtkWidget *info_label =
-        gtk_label_new("Hover over zones to highlight, click to change color");
+        gtk_label_new("Click a zone on the preview to recolour it");
+    gtk_widget_add_css_class(info_label, "status-line");
+    gtk_widget_set_halign(info_label, GTK_ALIGN_CENTER);
     gtk_box_append(GTK_BOX(keyboard_page), info_label);
-
-  } else {
-    // SINGLE_ZONE mode
-    keyboard_visual = gtk_drawing_area_new();
-    gtk_widget_set_size_request(keyboard_visual, 420, 140);
-    gtk_widget_set_halign(keyboard_visual, GTK_ALIGN_CENTER);
-    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(keyboard_visual),
-                                   (GtkDrawingAreaDrawFunc)draw_keyboard_visual,
-                                   this, nullptr);
-
-    GtkWidget *stage = make_card("BACKLIGHT", "input-keyboard-symbolic");
-    gtk_box_append(GTK_BOX(stage), keyboard_visual);
-    gtk_box_append(GTK_BOX(keyboard_page), stage);
-
-    current_single_color = {1.0f, 1.0f, 1.0f, 1.0f};
-
-    GtkWidget *colour_card = make_card("COLOUR", "preferences-color-symbolic");
-    GtkWidget *colour_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-
-    color_button = gtk_button_new_with_label("Choose Colour…");
-    gtk_widget_set_hexpand(color_button, TRUE);
-    g_signal_connect(color_button, "clicked",
-                     G_CALLBACK(on_choose_color_clicked), this);
-
-    apply_button = gtk_button_new_with_label("APPLY");
-    gtk_widget_add_css_class(apply_button, "primary-action");
-    g_signal_connect(apply_button, "clicked",
-                     G_CALLBACK(on_apply_color_clicked), this);
-
-    gtk_box_append(GTK_BOX(colour_row), color_button);
-    gtk_box_append(GTK_BOX(colour_row), apply_button);
-    gtk_box_append(GTK_BOX(colour_card), colour_row);
-    gtk_box_append(GTK_BOX(keyboard_page), colour_card);
   }
 
-  // Animated lighting effects (common for both types)
+  // Style radios, speed slider and colour picker.
   build_effect_controls();
 
-  // Status strip (common for both types)
+  // Status strip
   current_color_label = GTK_LABEL(gtk_label_new("Current Color: #000000"));
-  current_state_label = GTK_LABEL(gtk_label_new("Current State: OFF"));
+  current_state_label = GTK_LABEL(gtk_label_new(""));
   gtk_widget_add_css_class(GTK_WIDGET(current_color_label), "status-line");
   gtk_widget_add_css_class(GTK_WIDGET(current_state_label), "status-line");
 
@@ -705,12 +661,19 @@ void VictusKeyboardControl::update_keyboard_state_from_device() {
 
   if (szkeyboard_state.find("ERROR") == std::string::npos) {
     keyboard_enabled = (szkeyboard_state != "0");
-    gtk_button_set_label(GTK_BUTTON(toggle_button), keyboard_enabled
-                                                        ? "BACKLIGHT: ON"
-                                                        : "BACKLIGHT: OFF");
-    // Let the button itself show the state, not just its text.
-    gtk_widget_remove_css_class(toggle_button, keyboard_enabled ? "is-off" : "is-on");
-    gtk_widget_add_css_class(toggle_button, keyboard_enabled ? "is-on" : "is-off");
+    // The preview draws unlit key caps from keyboard_enabled, so it has to be
+    // repainted when the backlight is switched on or off.
+    if (keyboard_visual != nullptr)
+      gtk_widget_queue_draw(keyboard_visual);
+
+    // Reflect hardware state without the switch echoing it straight back.
+    if (power_switch != nullptr) {
+      g_signal_handlers_block_by_func(
+          power_switch, (gpointer)G_CALLBACK(on_power_switched), this);
+      gtk_switch_set_active(GTK_SWITCH(power_switch), keyboard_enabled);
+      g_signal_handlers_unblock_by_func(
+          power_switch, (gpointer)G_CALLBACK(on_power_switched), this);
+    }
 
     if (current_state_label)
       gtk_label_set_text(
@@ -812,6 +775,8 @@ void VictusKeyboardControl::on_choose_color_clicked(GtkWidget *widget,
                      (int)(color->green * 255),
                      (int)(color->blue * 255));
           gtk_button_set_label(GTK_BUTTON(cb->button), hex);
+          // Applied on selection - the app has no Apply step.
+          cb->self->update_keyboard_color(cb->self->current_single_color);
           cb->self->update_keyboard_visual();
           gdk_rgba_free(color);
         } else if (error && error->code != GTK_DIALOG_ERROR_DISMISSED) {
@@ -1073,27 +1038,42 @@ double rgba_to_hue(const GdkRGBA &color) {
 } // namespace
 
 void VictusKeyboardControl::build_effect_controls() {
-  GtkWidget *card = make_card("LIGHTING EFFECT", "media-playlist-repeat-symbolic");
+  // FLOW needs zones for the colour to travel across, so it is only offered on
+  // four-zone boards rather than shown as an option that degrades to RAINBOW.
+  const bool has_zones = (keyboard_type == "FOUR_ZONE");
+  style_count = has_zones ? 4 : 3;
 
-  GtkWidget *effect_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-  gtk_box_append(GTK_BOX(effect_row), make_field_label("MODE"));
+  static const char *const kStyleLabels[4] = {"Solid", "Rainbow", "Breathe",
+                                              "Flow"};
 
-  // FLOW needs zones to travel across, so say so up front on single-zone
-  // hardware rather than letting it silently look like Rainbow.
-  const char *flow_label = (keyboard_type == "FOUR_ZONE")
-                               ? "Flow (river)"
-                               : "Flow (needs 4 zones)";
-  const char *labels[kEffectCount + 1] = {"Static colour", "Rainbow cycle",
-                                          "Breathe", flow_label, nullptr};
+  GtkWidget *style_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 14);
+  gtk_box_append(GTK_BOX(style_row), make_field_label("STYLE"));
 
-  effect_dropdown = gtk_drop_down_new_from_strings(labels);
-  gtk_drop_down_set_selected(GTK_DROP_DOWN(effect_dropdown), 0);
-  gtk_widget_set_hexpand(effect_dropdown, TRUE);
-  gtk_box_append(GTK_BOX(effect_row), effect_dropdown);
-  g_signal_connect(effect_dropdown, "notify::selected",
-                   G_CALLBACK(on_effect_changed), this);
-  gtk_box_append(GTK_BOX(card), effect_row);
+  GtkWidget *first = nullptr;
+  for (int i = 0; i < style_count; i++) {
+    style_radios[i] = gtk_check_button_new_with_label(kStyleLabels[i]);
+    gtk_widget_add_css_class(style_radios[i], "style-radio");
 
+    // Grouping check buttons is what gives them radio behaviour in GTK4.
+    if (first == nullptr) {
+      first = style_radios[i];
+      gtk_check_button_set_active(GTK_CHECK_BUTTON(style_radios[i]), TRUE);
+    } else {
+      gtk_check_button_set_group(GTK_CHECK_BUTTON(style_radios[i]),
+                                 GTK_CHECK_BUTTON(first));
+    }
+
+    g_signal_connect(style_radios[i], "toggled",
+                     G_CALLBACK(on_style_toggled), this);
+    gtk_box_append(GTK_BOX(style_row), style_radios[i]);
+  }
+  for (int i = style_count; i < 4; i++)
+    style_radios[i] = nullptr;
+
+  gtk_box_append(GTK_BOX(keyboard_page), style_row);
+
+  // Speed sits directly under the style choice, since it only qualifies the
+  // animated styles.
   effect_speed_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
   gtk_box_append(GTK_BOX(effect_speed_row), make_field_label("SPEED"));
 
@@ -1105,15 +1085,61 @@ void VictusKeyboardControl::build_effect_controls() {
   g_signal_connect(effect_speed_scale, "value-changed",
                    G_CALLBACK(on_effect_speed_changed), this);
   gtk_box_append(GTK_BOX(effect_speed_row), effect_speed_scale);
-  gtk_box_append(GTK_BOX(card), effect_speed_row);
-  gtk_box_append(GTK_BOX(keyboard_page), card);
+  gtk_box_append(GTK_BOX(keyboard_page), effect_speed_row);
 
-  // Nothing to set the speed of until an effect is picked.
-  gtk_widget_set_sensitive(effect_speed_row, FALSE);
+  // Colour only means anything for SOLID.
+  colour_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+  gtk_box_append(GTK_BOX(colour_row), make_field_label("COLOUR"));
+
+  color_button = gtk_button_new_with_label("Choose Colour…");
+  gtk_widget_set_hexpand(color_button, TRUE);
+  g_signal_connect(color_button, "clicked",
+                   G_CALLBACK(on_choose_color_clicked), this);
+  gtk_box_append(GTK_BOX(colour_row), color_button);
+  gtk_box_append(GTK_BOX(keyboard_page), colour_row);
+
+  update_control_visibility();
+}
+
+void VictusKeyboardControl::update_control_visibility() {
+  const bool solid = (current_effect == "STATIC");
+  if (colour_row != nullptr)
+    gtk_widget_set_visible(colour_row, solid);
+  if (effect_speed_row != nullptr)
+    gtk_widget_set_visible(effect_speed_row, !solid);
+}
+
+void VictusKeyboardControl::on_style_toggled(GtkCheckButton *button,
+                                             gpointer data) {
+  VictusKeyboardControl *self = static_cast<VictusKeyboardControl *>(data);
+
+  // "toggled" fires for the button being switched off as well; only act on the
+  // one that is now active.
+  if (!gtk_check_button_get_active(button))
+    return;
+
+  static const char *const kStyleCommands[4] = {"STATIC", "RAINBOW", "BREATHE",
+                                                "FLOW"};
+  for (int i = 0; i < self->style_count; i++) {
+    if (self->style_radios[i] == GTK_WIDGET(button)) {
+      self->current_effect = kStyleCommands[i];
+      break;
+    }
+  }
+
+  self->update_control_visibility();
+  self->apply_current_effect();
+}
+
+void VictusKeyboardControl::on_power_switched(GObject *sw,
+                                              GParamSpec * /*pspec*/,
+                                              gpointer data) {
+  VictusKeyboardControl *self = static_cast<VictusKeyboardControl *>(data);
+  self->update_keyboard_state(gtk_switch_get_active(GTK_SWITCH(sw)));
 }
 
 void VictusKeyboardControl::refresh_effect_from_device() {
-  if (!effect_dropdown)
+  if (style_radios[0] == nullptr)
     return;
 
   auto effect_future = socket_client->send_command_async(GET_KBD_EFFECT);
@@ -1126,23 +1152,25 @@ void VictusKeyboardControl::refresh_effect_from_device() {
   int speed = current_effect_speed;
   stream >> name >> speed;
 
+  static const char *const kStyleCommands[4] = {"STATIC", "RAINBOW", "BREATHE",
+                                                "FLOW"};
   int index = 0;
-  for (int i = 0; i < kEffectCount; i++) {
-    if (name == kEffectCommands[i]) {
+  for (int i = 0; i < style_count; i++) {
+    if (name == kStyleCommands[i]) {
       index = i;
       break;
     }
   }
 
-  current_effect = kEffectCommands[index];
+  current_effect = kStyleCommands[index];
   current_effect_speed = (speed < 1 || speed > 100) ? 50 : speed;
 
   // Reflect the backend's state without echoing it straight back at it.
-  g_signal_handlers_block_by_func(effect_dropdown,
-                                  (gpointer)G_CALLBACK(on_effect_changed), this);
-  gtk_drop_down_set_selected(GTK_DROP_DOWN(effect_dropdown), index);
+  g_signal_handlers_block_by_func(
+      style_radios[index], (gpointer)G_CALLBACK(on_style_toggled), this);
+  gtk_check_button_set_active(GTK_CHECK_BUTTON(style_radios[index]), TRUE);
   g_signal_handlers_unblock_by_func(
-      effect_dropdown, (gpointer)G_CALLBACK(on_effect_changed), this);
+      style_radios[index], (gpointer)G_CALLBACK(on_style_toggled), this);
 
   g_signal_handlers_block_by_func(
       effect_speed_scale, (gpointer)G_CALLBACK(on_effect_speed_changed), this);
@@ -1150,9 +1178,8 @@ void VictusKeyboardControl::refresh_effect_from_device() {
   g_signal_handlers_unblock_by_func(
       effect_speed_scale, (gpointer)G_CALLBACK(on_effect_speed_changed), this);
 
-  bool animating = current_effect != "STATIC";
-  gtk_widget_set_sensitive(effect_speed_row, animating);
-  if (animating)
+  update_control_visibility();
+  if (current_effect != "STATIC")
     start_preview_animation();
 }
 
@@ -1169,13 +1196,22 @@ void VictusKeyboardControl::apply_current_effect() {
   }
 
   bool animating = current_effect != "STATIC";
-  gtk_widget_set_sensitive(effect_speed_row, animating);
+  update_control_visibility();
 
   if (animating) {
     start_preview_animation();
   } else {
     stop_preview_animation();
-    // Fall back to whatever colour the keyboard settled on.
+    // Fall back to whatever colour the keyboard settled on. Without re-reading
+    // it the preview keeps the colour it was constructed with (white) while the
+    // hardware sits on the last animated frame.
+    auto colour_future = socket_client->send_command_async(GET_KEYBOARD_COLOR);
+    GdkRGBA settled;
+    if (parse_rgb_triplet(colour_future.get(), &settled)) {
+      current_single_color = settled;
+      for (int zone = 0; zone < kFourZoneCount; zone++)
+        zone_colors[zone] = settled;
+    }
     update_keyboard_state_from_device();
     update_current_color_label(this);
     gtk_widget_queue_draw(keyboard_visual);

@@ -20,6 +20,15 @@ const char *kVictusCss = R"CSS(
 @define-color victus_hot         #ff4757;
 @define-color victus_ok          #00e676;
 
+/* GTK draws radios, focus rings and selections from its own accent colours,
+   which follow the desktop's accent (orange on Ubuntu) and would otherwise
+   clash with everything here. Point them at the app accent. */
+@define-color accent_color @victus_accent;
+@define-color accent_bg_color @victus_accent;
+@define-color accent_fg_color #06222b;
+@define-color theme_selected_bg_color @victus_accent;
+@define-color theme_selected_fg_color #06222b;
+
 window,
 .victus-root {
   background-color: @victus_bg;
@@ -227,6 +236,79 @@ button.power-toggle.is-on {
 button.power-toggle.is-off {
   border-color: @victus_border;
   color: @victus_text_dim;
+}
+
+/* Material-style backlight switch: pill track, circular knob, accent when on. */
+switch {
+  background-color: #0c1119;
+  border: 1px solid @victus_border;
+  border-radius: 15px;
+  min-width: 50px;
+  min-height: 26px;
+  padding: 2px;
+  transition: background-color 200ms ease, border-color 200ms ease,
+              box-shadow 200ms ease;
+}
+
+switch:checked {
+  background-color: @victus_accent_dim;
+  border-color: @victus_accent;
+  box-shadow: 0 0 16px rgba(0, 217, 255, 0.45);
+}
+
+switch > slider {
+  background: @victus_text_dim;
+  border: none;
+  border-radius: 50%;
+  min-width: 20px;
+  min-height: 20px;
+  margin: 0;
+  transition: background 200ms ease;
+}
+
+switch:checked > slider {
+  background: #ffffff;
+}
+
+switch:disabled {
+  opacity: 0.45;
+}
+
+/* Style selector: radios that read as chips rather than form controls. */
+checkbutton.style-radio {
+  color: @victus_text_dim;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  padding: 4px 6px;
+  transition: color 160ms ease;
+}
+
+checkbutton.style-radio:hover {
+  color: @victus_text;
+}
+
+checkbutton.style-radio:checked {
+  color: @victus_accent;
+}
+
+checkbutton.style-radio > radio,
+checkbutton.style-radio > check {
+  background-color: #0c1119;
+  border: 1px solid @victus_border;
+  min-width: 15px;
+  min-height: 15px;
+  transition: all 160ms ease;
+}
+
+checkbutton.style-radio:checked > radio,
+checkbutton.style-radio:checked > check,
+checkbutton.style-radio radio:checked,
+checkbutton.style-radio check:checked {
+  background-color: @victus_accent;
+  background-image: none;
+  border-color: @victus_accent;
+  color: @victus_bg;
+  box-shadow: 0 0 10px rgba(0, 217, 255, 0.6);
 }
 
 /* Sliders: thin dark rail, glowing accent fill, square-ish knob. */

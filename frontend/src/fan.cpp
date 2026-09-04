@@ -1,4 +1,5 @@
 #include "fan.hpp"
+#include "gauges.hpp"
 #include "socket.hpp"
 #include <iostream>
 #include <string>
@@ -69,6 +70,53 @@ GtkWidget *make_card(const char *title, const char *icon_name)
     return card;
 }
 
+// One telemetry dial: caption, the analog gauge, then the digital value under
+// it, so the shape gives the impression and the number gives the detail.
+GtkWidget *make_gauge_tile(const char *caption, const char *unit,
+                           const char *icon_name, int gauge_width,
+                           int gauge_height, GtkDrawingAreaDrawFunc draw_func,
+                           gpointer draw_data, GtkWidget **gauge_out,
+                           GtkWidget **value_out)
+{
+    GtkWidget *tile = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_widget_set_hexpand(tile, TRUE);
+    gtk_widget_set_halign(tile, GTK_ALIGN_CENTER);
+
+    GtkWidget *caption_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget *caption_icon = gtk_image_new_from_icon_name(icon_name);
+    gtk_widget_add_css_class(caption_icon, "tile-icon");
+    GtkWidget *caption_label = gtk_label_new(caption);
+    gtk_widget_add_css_class(caption_label, "field-label");
+    gtk_box_append(GTK_BOX(caption_row), caption_icon);
+    gtk_box_append(GTK_BOX(caption_row), caption_label);
+    gtk_widget_set_halign(caption_row, GTK_ALIGN_CENTER);
+
+    GtkWidget *gauge = gtk_drawing_area_new();
+    gtk_widget_set_size_request(gauge, gauge_width, gauge_height);
+    gtk_widget_set_halign(gauge, GTK_ALIGN_CENTER);
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(gauge), draw_func,
+                                   draw_data, nullptr);
+
+    GtkWidget *value_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+    gtk_widget_set_halign(value_row, GTK_ALIGN_CENTER);
+    GtkWidget *value = gtk_label_new("--");
+    gtk_widget_add_css_class(value, "readout");
+    GtkWidget *unit_label = gtk_label_new(unit);
+    gtk_widget_add_css_class(unit_label, "readout-unit");
+    gtk_widget_set_valign(unit_label, GTK_ALIGN_END);
+    gtk_widget_set_margin_bottom(unit_label, 4);
+    gtk_box_append(GTK_BOX(value_row), value);
+    gtk_box_append(GTK_BOX(value_row), unit_label);
+
+    gtk_box_append(GTK_BOX(tile), caption_row);
+    gtk_box_append(GTK_BOX(tile), gauge);
+    gtk_box_append(GTK_BOX(tile), value_row);
+
+    *gauge_out = gauge;
+    *value_out = value;
+    return tile;
+}
+
 // One telemetry tile: a small caption over a large monospace value.
 GtkWidget *make_stat_tile(const char *caption, const char *unit,
                           const char *icon_name, GtkWidget **value_out)
@@ -114,76 +162,88 @@ VictusFanControl::VictusFanControl(std::shared_ptr<VictusSocketClient> client) :
     gtk_widget_set_margin_start(fan_page, 20);
     gtk_widget_set_margin_end(fan_page, 20);
 
-    // --- Cooling mode ---
-    GtkWidget *mode_card = make_card("COOLING MODE", "power-profile-performance-symbolic");
-
-    GtkWidget *mode_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-    GtkWidget *mode_caption = gtk_label_new("PROFILE");
-    gtk_widget_add_css_class(mode_caption, "field-label");
-    gtk_box_append(GTK_BOX(mode_row), mode_caption);
+    // --- Header: title left, cooling profile right ---
+    GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    GtkWidget *header_icon = gtk_image_new_from_icon_name("weather-windy-symbolic");
+    gtk_widget_add_css_class(header_icon, "section-icon");
+    GtkWidget *header_label = gtk_label_new("COOLING");
+    gtk_widget_add_css_class(header_label, "section-title");
+    GtkWidget *header_spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_hexpand(header_spacer, TRUE);
 
     mode_selector = gtk_combo_box_text_new();
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode_selector), "AUTO", "AUTO");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode_selector), "BETTER_AUTO", "Better Auto");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode_selector), "MANUAL", "MANUAL");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode_selector), "MAX", "MAX");
-    gtk_widget_set_hexpand(mode_selector, TRUE);
     g_signal_connect(mode_selector, "changed", G_CALLBACK(on_mode_changed), this);
-    gtk_box_append(GTK_BOX(mode_row), mode_selector);
-    gtk_box_append(GTK_BOX(mode_card), mode_row);
 
-    // --- Manual speed ---
-    slider_label = gtk_label_new("MANUAL SPEED (1-8)");
+    gtk_box_append(GTK_BOX(header), header_icon);
+    gtk_box_append(GTK_BOX(header), header_label);
+    gtk_box_append(GTK_BOX(header), header_spacer);
+    gtk_box_append(GTK_BOX(header), mode_selector);
+    gtk_box_append(GTK_BOX(fan_page), header);
+
+    // --- Analog dials ---
+    GtkWidget *dial_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 26);
+    gtk_widget_set_halign(dial_row, GTK_ALIGN_CENTER);
+
+    gtk_box_append(GTK_BOX(dial_row),
+        make_gauge_tile("FAN 1", "RPM", "weather-windy-symbolic", 104, 104,
+                        draw_fan1, this, &fan1_gauge, &fan1_speed_label));
+    gtk_box_append(GTK_BOX(dial_row),
+        make_gauge_tile("FAN 2", "RPM", "weather-windy-symbolic", 104, 104,
+                        draw_fan2, this, &fan2_gauge, &fan2_speed_label));
+    gtk_box_append(GTK_BOX(dial_row),
+        make_gauge_tile("CPU", "\u00b0C", "computer-symbolic", 46, 104,
+                        draw_cpu, this, &cpu_gauge, &cpu_temp_label));
+    gtk_box_append(GTK_BOX(dial_row),
+        make_gauge_tile("GPU", "\u00b0C", "video-display-symbolic", 46, 104,
+                        draw_gpu, this, &gpu_gauge, &gpu_temp_label));
+
+    gtk_box_append(GTK_BOX(fan_page), dial_row);
+
+    // --- Manual speed (only meaningful where the firmware accepts targets) ---
+    manual_speed_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    slider_label = gtk_label_new("MANUAL SPEED");
     gtk_widget_add_css_class(slider_label, "field-label");
-    gtk_widget_set_halign(slider_label, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(mode_card), slider_label);
+    gtk_box_append(GTK_BOX(manual_speed_box), slider_label);
 
     speed_slider = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 1, RPM_STEPS, 1);
     gtk_scale_set_draw_value(GTK_SCALE(speed_slider), TRUE);
+    gtk_widget_set_hexpand(speed_slider, TRUE);
     g_signal_connect(speed_slider, "value-changed", G_CALLBACK(on_speed_slider_changed), this);
-    gtk_box_append(GTK_BOX(mode_card), speed_slider);
-    gtk_box_append(GTK_BOX(fan_page), mode_card);
-
-    // --- Telemetry tiles ---
-    GtkWidget *telemetry_card = make_card("TELEMETRY", "speedometer-symbolic");
-    GtkWidget *grid = gtk_grid_new();
-    gtk_grid_set_column_spacing(GTK_GRID(grid), 20);
-    gtk_grid_set_row_spacing(GTK_GRID(grid), 16);
-    gtk_grid_set_column_homogeneous(GTK_GRID(grid), TRUE);
-
-    gtk_grid_attach(GTK_GRID(grid), make_stat_tile("FAN 1", "RPM", "weather-windy-symbolic", &fan1_speed_label), 0, 0, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), make_stat_tile("FAN 2", "RPM", "weather-windy-symbolic", &fan2_speed_label), 1, 0, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), make_stat_tile("CPU", "\u00b0C", "computer-symbolic", &cpu_temp_label), 0, 1, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), make_stat_tile("GPU", "\u00b0C", "video-display-symbolic", &gpu_temp_label), 1, 1, 1, 1);
-
-    gtk_box_append(GTK_BOX(telemetry_card), grid);
-    gtk_box_append(GTK_BOX(fan_page), telemetry_card);
+    gtk_box_append(GTK_BOX(manual_speed_box), speed_slider);
+    gtk_box_append(GTK_BOX(fan_page), manual_speed_box);
 
     state_label = gtk_label_new("Current State: N/A");
     gtk_widget_add_css_class(state_label, "status-line");
     gtk_widget_set_halign(state_label, GTK_ALIGN_CENTER);
     gtk_box_append(GTK_BOX(fan_page), state_label);
 
-    // Boards whose BIOS refuses software fan control never expose fan*_target.
-    // Offering MANUAL there produces a slider that silently fails, so say what
-    // is going on instead.
+    // Boards whose firmware refuses software fan control never expose
+    // fan*_target. Manual speed cannot work there, so the control is removed
+    // rather than shown greyed out, and MANUAL is dropped from the profiles.
     {
         auto support = socket_client->send_command_async(GET_FAN_TARGET_SUPPORT);
         fan_targets_supported = (support.get() == "SUPPORTED");
     }
 
     if (!fan_targets_supported) {
+        gtk_widget_set_visible(manual_speed_box, FALSE);
+        gtk_combo_box_text_remove(GTK_COMBO_BOX_TEXT(mode_selector), 2);  // MANUAL
+
         GtkWidget *notice = gtk_label_new(
-            "This board's firmware does not accept fan speed targets, so "
-            "MANUAL speed is unavailable. AUTO and MAX still work.");
+            "This board's firmware does not accept fan speed targets, so manual "
+            "speed is unavailable. AUTO, Better Auto and MAX still work.");
         gtk_label_set_wrap(GTK_LABEL(notice), TRUE);
         gtk_widget_add_css_class(notice, "notice");
-        gtk_widget_set_halign(notice, GTK_ALIGN_START);
-        gtk_box_append(GTK_BOX(mode_card), notice);
-
-        gtk_widget_set_sensitive(speed_slider, FALSE);
-        gtk_widget_set_sensitive(slider_label, FALSE);
+        gtk_box_append(GTK_BOX(fan_page), notice);
     }
+
+    // Rotors turn from the measured RPM, so the dials track the real fans.
+    gauge_last_frame_us = g_get_monotonic_time();
+    gauge_tick_id = g_timeout_add(33, on_gauge_tick, this);
 
     // Block "changed" signal during init so set_active_id doesn't fire
     // on_mode_changed and reset fan speeds with the slider's default value.
@@ -290,6 +350,21 @@ void VictusFanControl::update_fan_speeds()
                 gtk_label_set_text(GTK_LABEL(self->gpu_temp_label), u->gpu.c_str());
                 apply_temperature_class(self->cpu_temp_label, u->cpu);
                 apply_temperature_class(self->gpu_temp_label, u->gpu);
+
+                // Keep the dials' numeric state in step with the labels.
+                auto to_number = [](const std::string &text, double *out) {
+                    try { *out = std::stod(text); return true; }
+                    catch (...) { *out = 0.0; return false; }
+                };
+                to_number(u->fan1, &self->fan1_rpm);
+                to_number(u->fan2, &self->fan2_rpm);
+                self->cpu_valid = to_number(u->cpu, &self->cpu_celsius);
+                self->gpu_valid = to_number(u->gpu, &self->gpu_celsius);
+
+                gtk_widget_queue_draw(self->cpu_gauge);
+                gtk_widget_queue_draw(self->gpu_gauge);
+                gtk_widget_queue_draw(self->fan1_gauge);
+                gtk_widget_queue_draw(self->fan2_gauge);
                 self->refresh_in_flight.store(false);
                 return G_SOURCE_REMOVE;
             },
@@ -389,4 +464,58 @@ void VictusFanControl::on_speed_slider_changed(GtkRange *range, gpointer data)
 
     int level = static_cast<int>(gtk_range_get_value(range));
     self->set_fan_rpm(level);
+}
+
+// --- Analog dials -----------------------------------------------------------
+
+gboolean VictusFanControl::on_gauge_tick(gpointer data)
+{
+    VictusFanControl *self = static_cast<VictusFanControl *>(data);
+
+    gint64 now_us = g_get_monotonic_time();
+    double elapsed = (now_us - self->gauge_last_frame_us) / 1000000.0;
+    self->gauge_last_frame_us = now_us;
+
+    // Real fans turn far too fast to render honestly (3000 RPM is 50 rev/s), so
+    // the drawn rotation is scaled down while staying proportional to the
+    // measured speed.
+    const double kVisualRevPerRpmSecond = 1.0 / 1200.0;
+    self->fan1_angle += elapsed * self->fan1_rpm * kVisualRevPerRpmSecond * 2.0 * M_PI;
+    self->fan2_angle += elapsed * self->fan2_rpm * kVisualRevPerRpmSecond * 2.0 * M_PI;
+    self->fan1_angle = std::fmod(self->fan1_angle, 2.0 * M_PI);
+    self->fan2_angle = std::fmod(self->fan2_angle, 2.0 * M_PI);
+
+    // Only the rotors animate; the thermometers redraw when a reading lands.
+    if (self->fan1_rpm > 0.0)
+        gtk_widget_queue_draw(self->fan1_gauge);
+    if (self->fan2_rpm > 0.0)
+        gtk_widget_queue_draw(self->fan2_gauge);
+
+    return G_SOURCE_CONTINUE;
+}
+
+void VictusFanControl::draw_fan1(GtkDrawingArea *, cairo_t *cr, int w, int h, gpointer data)
+{
+    VictusFanControl *self = static_cast<VictusFanControl *>(data);
+    draw_fan_rotor(cr, w, h, self->fan1_angle, self->fan1_rpm / FAN1_MAX_RPM,
+                   self->fan1_rpm > 0.0);
+}
+
+void VictusFanControl::draw_fan2(GtkDrawingArea *, cairo_t *cr, int w, int h, gpointer data)
+{
+    VictusFanControl *self = static_cast<VictusFanControl *>(data);
+    draw_fan_rotor(cr, w, h, self->fan2_angle, self->fan2_rpm / FAN2_MAX_RPM,
+                   self->fan2_rpm > 0.0);
+}
+
+void VictusFanControl::draw_cpu(GtkDrawingArea *, cairo_t *cr, int w, int h, gpointer data)
+{
+    VictusFanControl *self = static_cast<VictusFanControl *>(data);
+    draw_thermometer(cr, w, h, self->cpu_celsius, 100.0, self->cpu_valid);
+}
+
+void VictusFanControl::draw_gpu(GtkDrawingArea *, cairo_t *cr, int w, int h, gpointer data)
+{
+    VictusFanControl *self = static_cast<VictusFanControl *>(data);
+    draw_thermometer(cr, w, h, self->gpu_celsius, 100.0, self->gpu_valid);
 }
