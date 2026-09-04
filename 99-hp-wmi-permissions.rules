@@ -7,3 +7,9 @@ SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", GROUP="victus", MODE="0664"
 SUBSYSTEM=="hwmon", KERNELS=="hp-wmi", ACTION=="add|change", RUN+="/usr/bin/sh -c '/usr/bin/chgrp victus /sys%p/pwm1_enable /sys%p/fan1_target /sys%p/fan2_target 2>/dev/null; /usr/bin/chmod g+w /sys%p/pwm1_enable /sys%p/fan1_target /sys%p/fan2_target 2>/dev/null'"
 
 SUBSYSTEM=="leds", KERNEL=="hp::kbd_backlight", ACTION=="add|change", RUN+="/usr/bin/sh -c '/usr/bin/chgrp victus /sys%p/brightness /sys%p/multi_intensity 2>/dev/null; /usr/bin/chmod g+w /sys%p/brightness /sys%p/multi_intensity 2>/dev/null'"
+
+# Four-zone RGB files (Omen boards) live on the platform device itself and are
+# created by the driver's probe, after the device's "add" event has fired, so
+# match "bind" and "change" too. The lighting animation writes them every
+# frame; with group write access it does so directly instead of through sudo.
+SUBSYSTEM=="platform", KERNEL=="hp-wmi", ACTION=="add|bind|change", RUN+="/usr/bin/sh -c '/usr/bin/chgrp victus /sys%p/rgb_zones/zone0* 2>/dev/null; /usr/bin/chmod g+w /sys%p/rgb_zones/zone0* 2>/dev/null'"

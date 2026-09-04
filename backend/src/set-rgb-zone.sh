@@ -32,9 +32,7 @@ if [ ! -f "$ZONE_FILE" ]; then
     exit 1
 fi
 
-echo "$COLOR" > "$ZONE_FILE"
-
-if [ $? -eq 0 ]; then
+if echo "$COLOR" > "$ZONE_FILE"; then
     exit 0
 else
     echo "Error: Failed to write to $ZONE_FILE"

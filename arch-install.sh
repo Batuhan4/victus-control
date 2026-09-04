@@ -299,6 +299,8 @@ start_services() {
     systemctl daemon-reload
     udevadm control --reload-rules
     udevadm trigger --subsystem-match=hwmon --subsystem-match=leds || true
+    # The four-zone RGB rule sits on the platform device, not on hwmon/leds.
+    udevadm trigger --subsystem-match=platform --sysname-match=hp-wmi || true
     udevadm settle || true
 
     systemctl enable --now victus-healthcheck.service || true
