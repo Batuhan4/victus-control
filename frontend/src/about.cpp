@@ -9,7 +9,7 @@ VictusAbout::VictusAbout()
 	about_dialog = gtk_about_dialog_new();
 
 	gtk_about_dialog_set_program_name(GTK_ABOUT_DIALOG(about_dialog), "victus-control");
-	gtk_about_dialog_set_version(GTK_ABOUT_DIALOG(about_dialog), "1.0.1");
+	gtk_about_dialog_set_version(GTK_ABOUT_DIALOG(about_dialog), "1.1.0");
 	gtk_about_dialog_set_copyright(GTK_ABOUT_DIALOG(about_dialog), "betelqeyza, Batuhan4");
 	gtk_about_dialog_set_authors(GTK_ABOUT_DIALOG(about_dialog), authors);
 	gtk_about_dialog_set_comments(GTK_ABOUT_DIALOG(about_dialog), "nothing :P");
