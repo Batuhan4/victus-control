@@ -190,6 +190,12 @@ void handle_command(const std::string &command_str, int client_socket) {
     } else {
       response = "ERROR: Invalid GET_FAN_MODE command format";
     }
+  } else if (command == "GET_FAN_TARGET_SUPPORT") {
+    if (!has_extra_tokens(ss)) {
+      response = get_fan_target_support();
+    } else {
+      response = "ERROR: Invalid GET_FAN_TARGET_SUPPORT command format";
+    }
   } else if (command == "GET_CPU_TEMP") {
     if (!has_extra_tokens(ss)) {
       response = get_cpu_temperature();

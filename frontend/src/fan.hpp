@@ -36,6 +36,10 @@ private:
 	static void on_mode_changed(GtkComboBox *widget, gpointer data);
 	static void on_speed_slider_changed(GtkRange *range, gpointer data);
 
+	// False when the driver exposes no fan*_target for this board, which
+	// means MANUAL speed cannot work no matter what the slider is set to.
+	bool fan_targets_supported = true;
+
 	std::shared_ptr<VictusSocketClient> socket_client;
     std::atomic<unsigned long long> manual_request_generation{0};
     // Set while a periodic refresh worker is running so a slow backend call

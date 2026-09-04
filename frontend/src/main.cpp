@@ -9,6 +9,7 @@
 #include "fan.hpp"
 #include "about.hpp"
 #include "socket.hpp"
+#include "style.hpp"
 
 class VictusControl
 {
@@ -30,8 +31,8 @@ public:
 		keyboard_control = std::make_unique<VictusKeyboardControl>(socket_client);
 
 		window = gtk_window_new();
-		gtk_window_set_title(GTK_WINDOW(window), "victus-control");
-		gtk_window_set_default_size(GTK_WINDOW(window), 800, 600);
+		gtk_window_set_title(GTK_WINDOW(window), "VICTUS CONTROL");
+		gtk_window_set_default_size(GTK_WINDOW(window), 880, 820);
 
 		notebook = gtk_notebook_new();
 		gtk_widget_set_hexpand(notebook, TRUE);
@@ -48,11 +49,30 @@ public:
 
 	void add_tabs()
 	{
-		GtkWidget *keyboard_page = keyboard_control->get_page();
-		GtkWidget *fan_page = fan_control->get_page();
+		// Wrap each page so a short window scrolls instead of clipping the
+		// bottom controls off.
+		auto wrap = [](GtkWidget *page) {
+			GtkWidget *scroller = gtk_scrolled_window_new();
+			gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller),
+				GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+			gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), page);
+			gtk_widget_set_vexpand(scroller, TRUE);
+			return scroller;
+		};
 
-		GtkWidget *label_keyboard = gtk_label_new("Keyboard");
-		GtkWidget *label_fan = gtk_label_new("FAN");
+		GtkWidget *keyboard_page = wrap(keyboard_control->get_page());
+		GtkWidget *fan_page = wrap(fan_control->get_page());
+
+		auto tab_label = [](const char *text, const char *icon_name) {
+			GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+			GtkWidget *icon = gtk_image_new_from_icon_name(icon_name);
+			gtk_box_append(GTK_BOX(box), icon);
+			gtk_box_append(GTK_BOX(box), gtk_label_new(text));
+			return box;
+		};
+
+		GtkWidget *label_keyboard = tab_label("LIGHTING", "input-keyboard-symbolic");
+		GtkWidget *label_fan = tab_label("COOLING", "weather-windy-symbolic");
 
 		gtk_notebook_append_page(GTK_NOTEBOOK(notebook), keyboard_page, label_keyboard);
 		gtk_notebook_append_page(GTK_NOTEBOOK(notebook), fan_page, label_fan);
@@ -63,7 +83,7 @@ public:
 		GtkWidget *header_bar = gtk_header_bar_new();
 		gtk_window_set_titlebar(GTK_WINDOW(window), header_bar);
 
-		GtkWidget *title_label = gtk_label_new("victus-control");
+		GtkWidget *title_label = gtk_label_new("VICTUS CONTROL");
 		gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header_bar), title_label);
 
 		menu_button = gtk_menu_button_new();
@@ -110,6 +130,7 @@ private:
 int main(int argc, char *argv[])
 {
 	gtk_init();
+	apply_victus_style();
 
 	try {
 		VictusControl app;

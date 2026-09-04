@@ -21,6 +21,8 @@
 #include <thread>
 #include <vector>
 
+#include <sys/stat.h>
+
 #include "fan.hpp"
 #include "util.hpp"
 #include "validation.hpp"
@@ -1087,6 +1089,18 @@ std::string set_fan_mode(const std::string &mode)
         }
     }
     return result;
+}
+
+std::string get_fan_target_support()
+{
+    std::string hwmon = find_hwmon_directory("/sys/devices/platform/hp-wmi/hwmon");
+    if (hwmon.empty()) {
+        return "UNSUPPORTED";
+    }
+
+    struct stat buffer;
+    std::string target = hwmon + "/fan1_target";
+    return stat(target.c_str(), &buffer) == 0 ? "SUPPORTED" : "UNSUPPORTED";
 }
 
 std::string ensure_better_auto_mode()

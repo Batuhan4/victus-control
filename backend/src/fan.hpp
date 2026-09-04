@@ -9,5 +9,10 @@ std::string get_fan_max_speed(const std::string &fan_num);
 std::string set_fan_speed(const std::string &fan_num, const std::string &speed, bool trigger_mode = true, bool update_cache = true);
 std::string get_cpu_temperature();
 std::string get_gpu_temperature();
+// "SUPPORTED" when the driver exposes fan*_target for this board, otherwise
+// "UNSUPPORTED". Boards whose BIOS refuses software fan control never get those
+// files, and the UI uses this to disable manual speed rather than offering a
+// control that silently fails.
+std::string get_fan_target_support();
 std::string ensure_better_auto_mode();
 void shutdown_fan_controller();

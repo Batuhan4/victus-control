@@ -297,9 +297,46 @@ void VictusKeyboardControl::apply_zone_color_immediately(int zone) {
               << " color!: " << result << std::endl;
 }
 
+namespace {
+
+// A titled panel. Grouping the controls into these is what turns the page from
+// a stack of full-width buttons into something with structure.
+GtkWidget *make_card(const char *title, const char *icon_name) {
+  GtkWidget *card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+  gtk_widget_add_css_class(card, "victus-card");
+
+  if (title != nullptr) {
+    // Symbolic icons come from the icon theme, so they follow the accent
+    // colour and need no bundled icon font.
+    GtkWidget *heading_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *icon = gtk_image_new_from_icon_name(icon_name);
+    gtk_widget_add_css_class(icon, "section-icon");
+
+    GtkWidget *heading = gtk_label_new(title);
+    gtk_widget_add_css_class(heading, "section-title");
+
+    gtk_box_append(GTK_BOX(heading_row), icon);
+    gtk_box_append(GTK_BOX(heading_row), heading);
+    gtk_widget_set_halign(heading_row, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(card), heading_row);
+  }
+  return card;
+}
+
+GtkWidget *make_field_label(const char *text) {
+  GtkWidget *label = gtk_label_new(text);
+  gtk_widget_add_css_class(label, "field-label");
+  gtk_widget_set_halign(label, GTK_ALIGN_START);
+  return label;
+}
+
+} // namespace
+
 void VictusKeyboardControl::build_ui_for_keyboard_type() {
   // Toggle button (common for both types)
-  toggle_button = gtk_button_new_with_label("Keyboard: OFF");
+  toggle_button = gtk_button_new_with_label("BACKLIGHT: OFF");
+  gtk_widget_add_css_class(toggle_button, "power-toggle");
+  gtk_widget_add_css_class(toggle_button, "is-off");
   gtk_box_append(GTK_BOX(keyboard_page), toggle_button);
   g_signal_connect(toggle_button, "clicked", G_CALLBACK(on_toggle_clicked),
                    this);
@@ -364,33 +401,51 @@ void VictusKeyboardControl::build_ui_for_keyboard_type() {
   } else {
     // SINGLE_ZONE mode
     keyboard_visual = gtk_drawing_area_new();
-    gtk_widget_set_size_request(keyboard_visual, 400, 120);
+    gtk_widget_set_size_request(keyboard_visual, 420, 140);
+    gtk_widget_set_halign(keyboard_visual, GTK_ALIGN_CENTER);
     gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(keyboard_visual),
                                    (GtkDrawingAreaDrawFunc)draw_keyboard_visual,
                                    this, nullptr);
-    gtk_box_append(GTK_BOX(keyboard_page), keyboard_visual);
+
+    GtkWidget *stage = make_card("BACKLIGHT", "input-keyboard-symbolic");
+    gtk_box_append(GTK_BOX(stage), keyboard_visual);
+    gtk_box_append(GTK_BOX(keyboard_page), stage);
 
     current_single_color = {1.0f, 1.0f, 1.0f, 1.0f};
 
-    color_button = gtk_button_new_with_label("Choose Color…");
-    gtk_box_append(GTK_BOX(keyboard_page), color_button);
+    GtkWidget *colour_card = make_card("COLOUR", "preferences-color-symbolic");
+    GtkWidget *colour_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+
+    color_button = gtk_button_new_with_label("Choose Colour…");
+    gtk_widget_set_hexpand(color_button, TRUE);
     g_signal_connect(color_button, "clicked",
                      G_CALLBACK(on_choose_color_clicked), this);
 
-    apply_button = gtk_button_new_with_label("Apply Color");
-    gtk_box_append(GTK_BOX(keyboard_page), apply_button);
+    apply_button = gtk_button_new_with_label("APPLY");
+    gtk_widget_add_css_class(apply_button, "primary-action");
     g_signal_connect(apply_button, "clicked",
                      G_CALLBACK(on_apply_color_clicked), this);
+
+    gtk_box_append(GTK_BOX(colour_row), color_button);
+    gtk_box_append(GTK_BOX(colour_row), apply_button);
+    gtk_box_append(GTK_BOX(colour_card), colour_row);
+    gtk_box_append(GTK_BOX(keyboard_page), colour_card);
   }
 
   // Animated lighting effects (common for both types)
   build_effect_controls();
 
-  // Status labels (common for both types)
+  // Status strip (common for both types)
   current_color_label = GTK_LABEL(gtk_label_new("Current Color: #000000"));
   current_state_label = GTK_LABEL(gtk_label_new("Current State: OFF"));
-  gtk_box_append(GTK_BOX(keyboard_page), GTK_WIDGET(current_color_label));
-  gtk_box_append(GTK_BOX(keyboard_page), GTK_WIDGET(current_state_label));
+  gtk_widget_add_css_class(GTK_WIDGET(current_color_label), "status-line");
+  gtk_widget_add_css_class(GTK_WIDGET(current_state_label), "status-line");
+
+  GtkWidget *status_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 18);
+  gtk_widget_set_halign(status_row, GTK_ALIGN_CENTER);
+  gtk_box_append(GTK_BOX(status_row), GTK_WIDGET(current_color_label));
+  gtk_box_append(GTK_BOX(status_row), GTK_WIDGET(current_state_label));
+  gtk_box_append(GTK_BOX(keyboard_page), status_row);
 }
 
 int get_zone_at_position(int row, int col) {
@@ -415,67 +470,109 @@ int get_zone_at_position(int row, int col) {
   }
 }
 
+namespace {
+
+void rounded_rect(cairo_t *cr, double x, double y, double w, double h,
+                  double radius) {
+  cairo_new_sub_path(cr);
+  cairo_arc(cr, x + w - radius, y + radius,     radius, -G_PI / 2, 0);
+  cairo_arc(cr, x + w - radius, y + h - radius, radius, 0, G_PI / 2);
+  cairo_arc(cr, x + radius,     y + h - radius, radius, G_PI / 2, G_PI);
+  cairo_arc(cr, x + radius,     y + radius,     radius, G_PI, 1.5 * G_PI);
+  cairo_close_path(cr);
+}
+
+// Draws one key: an unlit dark cap, the backlight colour over it, and a few
+// expanding translucent passes standing in for a glow (cairo has no blur).
+// Glow strength follows the colour's brightness, so a dim colour does not
+// bloom like a bright one.
+void draw_key(cairo_t *cr, double x, double y, double w, double h,
+              const GdkRGBA &color, bool lit) {
+  const double radius = 4.0;
+  double brightness = 0.299 * color.red + 0.587 * color.green + 0.114 * color.blue;
+
+  if (lit && brightness > 0.02) {
+    for (int pass = 3; pass >= 1; pass--) {
+      double spread = pass * 2.5;
+      double alpha = 0.055 * brightness * (4 - pass);
+      cairo_set_source_rgba(cr, color.red, color.green, color.blue, alpha);
+      rounded_rect(cr, x - spread, y - spread, w + spread * 2, h + spread * 2,
+                   radius + spread);
+      cairo_fill(cr);
+    }
+  }
+
+  // Unlit key cap, so the keyboard still reads as a keyboard when it is off.
+  cairo_set_source_rgb(cr, 0.10, 0.13, 0.18);
+  rounded_rect(cr, x, y, w, h, radius);
+  cairo_fill(cr);
+
+  if (lit) {
+    cairo_set_source_rgba(cr, color.red, color.green, color.blue, 0.92);
+    rounded_rect(cr, x + 1, y + 1, w - 2, h - 2, radius - 1);
+    cairo_fill(cr);
+  }
+
+  // Top bevel: a thin brighter edge that suggests a moulded key cap.
+  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, lit ? 0.22 : 0.06);
+  cairo_set_line_width(cr, 1.0);
+  cairo_move_to(cr, x + radius, y + 1.0);
+  cairo_line_to(cr, x + w - radius, y + 1.0);
+  cairo_stroke(cr);
+}
+
+} // namespace
+
 void VictusKeyboardControl::draw_keyboard_visual(GtkDrawingArea *area,
                                                  cairo_t *cr, int width,
                                                  int height, gpointer data) {
   VictusKeyboardControl *self = static_cast<VictusKeyboardControl *>(data);
 
-  // No background - let the window theme show through
-
-  // Center the keyboard within the drawing area
   int total_width = kKeyboardColumns * (kKeyWidth + kKeySpacing) - kKeySpacing;
   int total_height = kKeyboardRows * (kKeyHeight + kKeySpacing) - kKeySpacing;
   int start_x = (width - total_width) / 2;
   int start_y = (height - total_height) / 2;
 
-  if (self->keyboard_type == "FOUR_ZONE") {
-    // Draw keyboard row by row with hover highlights
-    for (int row = 0; row < kKeyboardRows; row++) {
-      for (int col = 0; col < kKeyboardColumns; col++) {
-        int x = start_x + col * (kKeyWidth + kKeySpacing);
-        int y = start_y + row * (kKeyHeight + kKeySpacing);
+  // Chassis the keys sit in, so the panel reads as a laptop deck rather than
+  // squares floating on the window background.
+  const double pad = 12.0;
+  cairo_set_source_rgb(cr, 0.043, 0.055, 0.075);
+  rounded_rect(cr, start_x - pad, start_y - pad, total_width + pad * 2,
+               total_height + pad * 2, 8.0);
+  cairo_fill_preserve(cr);
+  cairo_set_source_rgba(cr, 0.14, 0.19, 0.25, 1.0);
+  cairo_set_line_width(cr, 1.0);
+  cairo_stroke(cr);
 
-        // Determine zone for this key
-        int zone = get_zone_at_position(row, col);
+  cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
-        // Draw key with zone color
-        cairo_set_source_rgb(cr, self->zone_colors[zone].red,
-                             self->zone_colors[zone].green,
-                             self->zone_colors[zone].blue);
-        cairo_rectangle(cr, x, y, kKeyWidth, kKeyHeight);
-        cairo_fill(cr);
+  for (int row = 0; row < kKeyboardRows; row++) {
+    for (int col = 0; col < kKeyboardColumns; col++) {
+      double x = start_x + col * (kKeyWidth + kKeySpacing);
+      double y = start_y + row * (kKeyHeight + kKeySpacing);
 
-        // Draw smart contrast border if this zone is hovered
-        if (zone == self->hovered_zone) {
-          // Calculate luminance to determine border color
-          double luminance = 0.299 * self->zone_colors[zone].red +
-                             0.587 * self->zone_colors[zone].green +
-                             0.114 * self->zone_colors[zone].blue;
-          // Use dark border if color is light, white border otherwise
-          if (luminance > 0.7) {
-            cairo_set_source_rgb(cr, 0.2, 0.2, 0.2); // Dark gray
-          } else {
-            cairo_set_source_rgb(cr, 1.0, 1.0, 1.0); // White
-          }
-          cairo_set_line_width(cr, 2);
-          cairo_rectangle(cr, x, y, kKeyWidth, kKeyHeight);
-          cairo_stroke(cr);
-        }
+      GdkRGBA color;
+      int zone = -1;
+      if (self->keyboard_type == "FOUR_ZONE") {
+        zone = get_zone_at_position(row, col);
+        color = self->zone_colors[zone];
+      } else {
+        color = self->current_single_color;
       }
-    }
 
-  } else {
-    // SINGLE_ZONE - all keys same color
-    GdkRGBA color;
-    color = self->current_single_color;
+      draw_key(cr, x, y, kKeyWidth, kKeyHeight, color, self->keyboard_enabled);
 
-    cairo_set_source_rgb(cr, color.red, color.green, color.blue);
-    for (int row = 0; row < kKeyboardRows; row++) {
-      for (int col = 0; col < kKeyboardColumns; col++) {
-        int x = start_x + col * (kKeyWidth + kKeySpacing);
-        int y = start_y + row * (kKeyHeight + kKeySpacing);
-        cairo_rectangle(cr, x, y, kKeyWidth, kKeyHeight);
-        cairo_fill(cr);
+      // Outline the hovered zone so it is obvious which one a click will edit.
+      if (zone >= 0 && zone == self->hovered_zone) {
+        double luminance =
+            0.299 * color.red + 0.587 * color.green + 0.114 * color.blue;
+        if (luminance > 0.7)
+          cairo_set_source_rgba(cr, 0.05, 0.05, 0.05, 0.9);
+        else
+          cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.9);
+        cairo_set_line_width(cr, 2.0);
+        rounded_rect(cr, x - 1, y - 1, kKeyWidth + 2, kKeyHeight + 2, 5.0);
+        cairo_stroke(cr);
       }
     }
   }
@@ -608,8 +705,12 @@ void VictusKeyboardControl::update_keyboard_state_from_device() {
 
   if (szkeyboard_state.find("ERROR") == std::string::npos) {
     keyboard_enabled = (szkeyboard_state != "0");
-    gtk_button_set_label(GTK_BUTTON(toggle_button),
-                         keyboard_enabled ? "Keyboard: ON" : "Keyboard: OFF");
+    gtk_button_set_label(GTK_BUTTON(toggle_button), keyboard_enabled
+                                                        ? "BACKLIGHT: ON"
+                                                        : "BACKLIGHT: OFF");
+    // Let the button itself show the state, not just its text.
+    gtk_widget_remove_css_class(toggle_button, keyboard_enabled ? "is-off" : "is-on");
+    gtk_widget_add_css_class(toggle_button, keyboard_enabled ? "is-on" : "is-off");
 
     if (current_state_label)
       gtk_label_set_text(
@@ -972,8 +1073,10 @@ double rgba_to_hue(const GdkRGBA &color) {
 } // namespace
 
 void VictusKeyboardControl::build_effect_controls() {
+  GtkWidget *card = make_card("LIGHTING EFFECT", "media-playlist-repeat-symbolic");
+
   GtkWidget *effect_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-  gtk_box_append(GTK_BOX(effect_row), gtk_label_new("Effect:"));
+  gtk_box_append(GTK_BOX(effect_row), make_field_label("MODE"));
 
   // FLOW needs zones to travel across, so say so up front on single-zone
   // hardware rather than letting it silently look like Rainbow.
@@ -985,13 +1088,14 @@ void VictusKeyboardControl::build_effect_controls() {
 
   effect_dropdown = gtk_drop_down_new_from_strings(labels);
   gtk_drop_down_set_selected(GTK_DROP_DOWN(effect_dropdown), 0);
+  gtk_widget_set_hexpand(effect_dropdown, TRUE);
   gtk_box_append(GTK_BOX(effect_row), effect_dropdown);
   g_signal_connect(effect_dropdown, "notify::selected",
                    G_CALLBACK(on_effect_changed), this);
-  gtk_box_append(GTK_BOX(keyboard_page), effect_row);
+  gtk_box_append(GTK_BOX(card), effect_row);
 
   effect_speed_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-  gtk_box_append(GTK_BOX(effect_speed_row), gtk_label_new("Speed:"));
+  gtk_box_append(GTK_BOX(effect_speed_row), make_field_label("SPEED"));
 
   effect_speed_scale =
       gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 1, 100, 1);
@@ -1001,7 +1105,8 @@ void VictusKeyboardControl::build_effect_controls() {
   g_signal_connect(effect_speed_scale, "value-changed",
                    G_CALLBACK(on_effect_speed_changed), this);
   gtk_box_append(GTK_BOX(effect_speed_row), effect_speed_scale);
-  gtk_box_append(GTK_BOX(keyboard_page), effect_speed_row);
+  gtk_box_append(GTK_BOX(card), effect_speed_row);
+  gtk_box_append(GTK_BOX(keyboard_page), card);
 
   // Nothing to set the speed of until an effect is picked.
   gtk_widget_set_sensitive(effect_speed_row, FALSE);
@@ -1143,6 +1248,21 @@ gboolean VictusKeyboardControl::on_preview_tick(gpointer data) {
     for (int zone = 0; zone < kFourZoneCount; zone++)
       self->zone_colors[zone] = color;
     self->current_single_color = color;
+  }
+
+  // The readout would otherwise show whatever colour was set when the effect
+  // started, which reads as a bug next to an animating keyboard. Take it from
+  // the frame just drawn rather than asking the backend 30 times a second.
+  if (self->current_color_label != nullptr) {
+    const GdkRGBA &shown = (self->keyboard_type == "FOUR_ZONE")
+                               ? self->zone_colors[0]
+                               : self->current_single_color;
+    char buffer[64];
+    g_snprintf(buffer, sizeof(buffer), "Current Color: %d %d %d",
+               static_cast<int>(shown.red * 255.0 + 0.5),
+               static_cast<int>(shown.green * 255.0 + 0.5),
+               static_cast<int>(shown.blue * 255.0 + 0.5));
+    gtk_label_set_text(self->current_color_label, buffer);
   }
 
   gtk_widget_queue_draw(self->keyboard_visual);

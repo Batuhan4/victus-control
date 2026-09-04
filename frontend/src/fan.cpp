@@ -26,6 +26,86 @@ const int FAN1_MAX_RPM = 5800;
 const int FAN2_MAX_RPM = 6100;
 const int RPM_STEPS = 8;
 
+namespace {
+
+// Temperature readouts change colour as they climb, so a hot machine is
+// obvious without reading the number.
+void apply_temperature_class(GtkWidget *label, const std::string &value)
+{
+    gtk_widget_remove_css_class(label, "warn");
+    gtk_widget_remove_css_class(label, "hot");
+
+    try {
+        int degrees = std::stoi(value);
+        if (degrees >= 85)
+            gtk_widget_add_css_class(label, "hot");
+        else if (degrees >= 70)
+            gtk_widget_add_css_class(label, "warn");
+    } catch (...) {
+        // "idle" or "N/A": leave it in the default accent colour.
+    }
+}
+
+GtkWidget *make_card(const char *title, const char *icon_name)
+{
+    GtkWidget *card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_add_css_class(card, "victus-card");
+
+    if (title != nullptr) {
+        // Symbolic icons come from the icon theme rather than a bundled icon
+        // font, so they inherit the accent colour and need no extra assets.
+        GtkWidget *heading_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        GtkWidget *icon = gtk_image_new_from_icon_name(icon_name);
+        gtk_widget_add_css_class(icon, "section-icon");
+
+        GtkWidget *heading = gtk_label_new(title);
+        gtk_widget_add_css_class(heading, "section-title");
+
+        gtk_box_append(GTK_BOX(heading_row), icon);
+        gtk_box_append(GTK_BOX(heading_row), heading);
+        gtk_widget_set_halign(heading_row, GTK_ALIGN_START);
+        gtk_box_append(GTK_BOX(card), heading_row);
+    }
+    return card;
+}
+
+// One telemetry tile: a small caption over a large monospace value.
+GtkWidget *make_stat_tile(const char *caption, const char *unit,
+                          const char *icon_name, GtkWidget **value_out)
+{
+    GtkWidget *tile = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_widget_set_hexpand(tile, TRUE);
+
+    GtkWidget *caption_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget *caption_icon = gtk_image_new_from_icon_name(icon_name);
+    gtk_widget_add_css_class(caption_icon, "tile-icon");
+    GtkWidget *caption_label = gtk_label_new(caption);
+    gtk_widget_add_css_class(caption_label, "field-label");
+    gtk_box_append(GTK_BOX(caption_row), caption_icon);
+    gtk_box_append(GTK_BOX(caption_row), caption_label);
+    gtk_widget_set_halign(caption_row, GTK_ALIGN_START);
+
+    GtkWidget *value_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+    GtkWidget *value = gtk_label_new("--");
+    gtk_widget_add_css_class(value, "readout");
+    gtk_widget_set_halign(value, GTK_ALIGN_START);
+
+    GtkWidget *unit_label = gtk_label_new(unit);
+    gtk_widget_add_css_class(unit_label, "readout-unit");
+    gtk_widget_set_valign(unit_label, GTK_ALIGN_END);
+    gtk_widget_set_margin_bottom(unit_label, 4);
+
+    gtk_box_append(GTK_BOX(value_row), value);
+    gtk_box_append(GTK_BOX(value_row), unit_label);
+    gtk_box_append(GTK_BOX(tile), caption_row);
+    gtk_box_append(GTK_BOX(tile), value_row);
+
+    *value_out = value;
+    return tile;
+}
+
+} // namespace
+
 VictusFanControl::VictusFanControl(std::shared_ptr<VictusSocketClient> client) : socket_client(client)
 {
     fan_page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 20);
@@ -34,45 +114,76 @@ VictusFanControl::VictusFanControl(std::shared_ptr<VictusSocketClient> client) :
     gtk_widget_set_margin_start(fan_page, 20);
     gtk_widget_set_margin_end(fan_page, 20);
 
-    // --- Mode Selector ---
+    // --- Cooling mode ---
+    GtkWidget *mode_card = make_card("COOLING MODE", "power-profile-performance-symbolic");
+
+    GtkWidget *mode_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    GtkWidget *mode_caption = gtk_label_new("PROFILE");
+    gtk_widget_add_css_class(mode_caption, "field-label");
+    gtk_box_append(GTK_BOX(mode_row), mode_caption);
+
     mode_selector = gtk_combo_box_text_new();
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode_selector), "AUTO", "AUTO");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode_selector), "BETTER_AUTO", "Better Auto");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode_selector), "MANUAL", "MANUAL");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode_selector), "MAX", "MAX");
+    gtk_widget_set_hexpand(mode_selector, TRUE);
     g_signal_connect(mode_selector, "changed", G_CALLBACK(on_mode_changed), this);
-    gtk_box_append(GTK_BOX(fan_page), mode_selector);
+    gtk_box_append(GTK_BOX(mode_row), mode_selector);
+    gtk_box_append(GTK_BOX(mode_card), mode_row);
 
-    // --- Speed Slider ---
-    slider_label = gtk_label_new("Manual Speed Control (1-8)");
+    // --- Manual speed ---
+    slider_label = gtk_label_new("MANUAL SPEED (1-8)");
+    gtk_widget_add_css_class(slider_label, "field-label");
     gtk_widget_set_halign(slider_label, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(fan_page), slider_label);
+    gtk_box_append(GTK_BOX(mode_card), slider_label);
 
     speed_slider = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 1, RPM_STEPS, 1);
     gtk_scale_set_draw_value(GTK_SCALE(speed_slider), TRUE);
     g_signal_connect(speed_slider, "value-changed", G_CALLBACK(on_speed_slider_changed), this);
-    gtk_box_append(GTK_BOX(fan_page), speed_slider);
+    gtk_box_append(GTK_BOX(mode_card), speed_slider);
+    gtk_box_append(GTK_BOX(fan_page), mode_card);
 
-    // --- Status Labels ---
+    // --- Telemetry tiles ---
+    GtkWidget *telemetry_card = make_card("TELEMETRY", "speedometer-symbolic");
+    GtkWidget *grid = gtk_grid_new();
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 20);
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 16);
+    gtk_grid_set_column_homogeneous(GTK_GRID(grid), TRUE);
+
+    gtk_grid_attach(GTK_GRID(grid), make_stat_tile("FAN 1", "RPM", "weather-windy-symbolic", &fan1_speed_label), 0, 0, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), make_stat_tile("FAN 2", "RPM", "weather-windy-symbolic", &fan2_speed_label), 1, 0, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), make_stat_tile("CPU", "\u00b0C", "computer-symbolic", &cpu_temp_label), 0, 1, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), make_stat_tile("GPU", "\u00b0C", "video-display-symbolic", &gpu_temp_label), 1, 1, 1, 1);
+
+    gtk_box_append(GTK_BOX(telemetry_card), grid);
+    gtk_box_append(GTK_BOX(fan_page), telemetry_card);
+
     state_label = gtk_label_new("Current State: N/A");
-    gtk_widget_set_halign(state_label, GTK_ALIGN_START);
+    gtk_widget_add_css_class(state_label, "status-line");
+    gtk_widget_set_halign(state_label, GTK_ALIGN_CENTER);
     gtk_box_append(GTK_BOX(fan_page), state_label);
 
-    fan1_speed_label = gtk_label_new("Fan 1 Speed: N/A RPM");
-    gtk_widget_set_halign(fan1_speed_label, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(fan_page), fan1_speed_label);
+    // Boards whose BIOS refuses software fan control never expose fan*_target.
+    // Offering MANUAL there produces a slider that silently fails, so say what
+    // is going on instead.
+    {
+        auto support = socket_client->send_command_async(GET_FAN_TARGET_SUPPORT);
+        fan_targets_supported = (support.get() == "SUPPORTED");
+    }
 
-    fan2_speed_label = gtk_label_new("Fan 2 Speed: N/A RPM");
-    gtk_widget_set_halign(fan2_speed_label, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(fan_page), fan2_speed_label);
+    if (!fan_targets_supported) {
+        GtkWidget *notice = gtk_label_new(
+            "This board's firmware does not accept fan speed targets, so "
+            "MANUAL speed is unavailable. AUTO and MAX still work.");
+        gtk_label_set_wrap(GTK_LABEL(notice), TRUE);
+        gtk_widget_add_css_class(notice, "notice");
+        gtk_widget_set_halign(notice, GTK_ALIGN_START);
+        gtk_box_append(GTK_BOX(mode_card), notice);
 
-    cpu_temp_label = gtk_label_new("CPU Temp: N/A °C");
-    gtk_widget_set_halign(cpu_temp_label, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(fan_page), cpu_temp_label);
-
-    gpu_temp_label = gtk_label_new("GPU Temp: N/A °C");
-    gtk_widget_set_halign(gpu_temp_label, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(fan_page), gpu_temp_label);
+        gtk_widget_set_sensitive(speed_slider, FALSE);
+        gtk_widget_set_sensitive(slider_label, FALSE);
+    }
 
     // Block "changed" signal during init so set_active_id doesn't fire
     // on_mode_changed and reset fan speeds with the slider's default value.
@@ -158,19 +269,16 @@ void VictusFanControl::update_fan_speeds()
         std::string gpu_temp = response_gpu_temp.get();
         std::string gpu_temp_text;
         if (gpu_temp == "IDLE") {
-            gpu_temp_text = "GPU Temp: idle";
+            gpu_temp_text = "idle";
         } else if (gpu_temp.find("ERROR") != std::string::npos) {
-            gpu_temp_text = "GPU Temp: N/A °C";
+            gpu_temp_text = "N/A";
         } else {
-            gpu_temp_text = "GPU Temp: " + gpu_temp + " °C";
+            gpu_temp_text = gpu_temp;
         }
 
+        // The tiles carry their own captions and units, so only the value goes here.
         auto *payload = new FanLabelUpdate{
-            this,
-            "Fan 1 Speed: " + fan1_speed + " RPM",
-            "Fan 2 Speed: " + fan2_speed + " RPM",
-            "CPU Temp: " + cpu_temp + " °C",
-            gpu_temp_text};
+            this, fan1_speed, fan2_speed, cpu_temp, gpu_temp_text};
 
         g_idle_add(
             +[](gpointer data) -> gboolean {
@@ -180,6 +288,8 @@ void VictusFanControl::update_fan_speeds()
                 gtk_label_set_text(GTK_LABEL(self->fan2_speed_label), u->fan2.c_str());
                 gtk_label_set_text(GTK_LABEL(self->cpu_temp_label), u->cpu.c_str());
                 gtk_label_set_text(GTK_LABEL(self->gpu_temp_label), u->gpu.c_str());
+                apply_temperature_class(self->cpu_temp_label, u->cpu);
+                apply_temperature_class(self->gpu_temp_label, u->gpu);
                 self->refresh_in_flight.store(false);
                 return G_SOURCE_REMOVE;
             },

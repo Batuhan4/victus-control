@@ -73,6 +73,7 @@ VictusSocketClient::VictusSocketClient(const std::string &path) : socket_path(pa
       {SET_FAN_SPEED, "SET_FAN_SPEED"},
       {SET_FAN_MODE, "SET_FAN_MODE"},
       {GET_FAN_MODE, "GET_FAN_MODE"},
+      {GET_FAN_TARGET_SUPPORT, "GET_FAN_TARGET_SUPPORT"},
       {GET_KEYBOARD_COLOR, "GET_KEYBOARD_COLOR"},
       {SET_KEYBOARD_COLOR, "SET_KEYBOARD_COLOR"},
       {SET_KEYBOARD_ZONE_COLOR, "SET_KEYBOARD_ZONE_COLOR"},
