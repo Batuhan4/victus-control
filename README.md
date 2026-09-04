@@ -28,10 +28,9 @@ privileged backend, a GTK4 desktop app, and a GNOME Shell extension.
 
 <div align="center">
 
-|                          Lighting                          |                          Cooling                          |
-| :--------------------------------------------------------: | :-------------------------------------------------------: |
-| <img src="docs/images/screenshot-lighting.png" width="420"> | <img src="docs/images/screenshot-cooling.png" width="420"> |
-|      Animated RGB effects with a live keyboard preview      |       Live fan RPM and CPU/GPU temperature telemetry       |
+<img src="docs/images/screenshot-dashboard.png" width="620" alt="victus-control dashboard">
+
+*One page: animated backlight preview above, analog fan dials and thermometers below.*
 
 </div>
 
@@ -62,7 +61,7 @@ privileged backend, a GTK4 desktop app, and a GNOME Shell extension.
 | 🌀 | **Better Auto** | Samples CPU/GPU temperature and utilisation every ~2 s, clamps to each fan's hardware maximum, and reapplies targets every 90 s with the firmware-required 10 s stagger. Fans climb smoothly with load instead of idling at 2000 RPM like HP's AUTO. |
 | 🎚️ | **Manual mode** | Eight RPM steps (~2000 ➜ 5800/6100 RPM) with per-fan precision and watchdog refreshes that keep settings alive through firmware quirks. |
 | 🌈 | **Animated lighting** | Single-zone and four-zone RGB, brightness, and rainbow / breathe / flow animations that keep running after the app is closed. |
-| 📊 | **Live telemetry** | Fan RPM and CPU/GPU temperatures at a glance, colour-coded as they climb. |
+| 📊 | **Analog telemetry** | Fan dials whose blades turn with the real RPM, and thermometers that shift colour as they heat. |
 | 🖥️ | **GNOME integration** | Fan and keyboard controls from the top panel. |
 
 > [!WARNING]
@@ -166,14 +165,19 @@ The installer handles dependency install, user/group creation, DKMS module regis
 
 Launch the GTK app (`victus-control`) or use the CLI client (`test_backend.py`).
 
-**Cooling tab** — the mode dropdown offers `AUTO`, `Better Auto`, `MANUAL`, `MAX`:
+Everything lives on one page, with a card per subsystem.
+
+**Cooling card** — the profile dropdown offers `AUTO`, `Better Auto`, `MANUAL`, `MAX`:
 
 - *Better Auto* is enforced by the background service on each boot, keeps fans in manual PWM, and adjusts RPM from temperature and utilisation — ideal for gaming or heavy workloads.
 - *Manual* maps slider positions to calibrated RPM steps; fan 2 honours the 10 s offset automatically.
 
-Live fan RPM and CPU/GPU temperatures are shown as telemetry readouts, which turn amber above 70 °C and red above 85 °C.
+Fan speed and temperature are shown as analog dials with the digital value under each. The rotor blades turn at a rate derived from the measured RPM, and a stopped fan renders grey rather than merely still. Thermometers and readouts shift cyan → amber → red, crossing at 70 °C and 85 °C.
 
-**Lighting tab** — RGB colour, brightness, and the animated effects below.
+> [!NOTE]
+> On boards whose firmware refuses fan speed targets, manual speed is removed from the card entirely and `MANUAL` is dropped from the profile list, rather than being offered as a control that does nothing.
+
+**Keyboard card** — a switch turns the backlight on and off, a row of style radios picks the lighting mode, and the speed slider or colour picker appears depending on which style is selected. There is no Apply step; changing anything applies it.
 
 Backend status: `systemctl status victus-backend.service` (logs via `journalctl -u victus-backend`).
 
@@ -186,14 +190,20 @@ Backend status: `systemctl status victus-backend.service` (logs via `journalctl 
 | **Static colour** | One fixed colour — the classic behaviour |
 | **Rainbow cycle** | The whole keyboard walks the hue wheel |
 | **Breathe** | The current colour fades in and out |
-| **Flow (river)** | On four-zone Omen keyboards the hue travels left-to-right across the zones, so the colour flows along the board |
+| **Flow (river)** | On four-zone Omen keyboards the hue travels left-to-right across the zones, so the colour flows along the board. Not offered on single-zone hardware, which has no geometry for it |
+
+<div align="center">
+<img src="docs/images/screenshot-solid.png" width="560" alt="Solid style showing the colour picker">
+<br>
+<em>Picking <b>Solid</b> swaps the speed slider for a colour picker — the card only shows the control that applies.</em>
+</div>
 
 - The **Speed** slider (1–100) sets the cycle rate.
 - Picking a static colour stops the animation, and the chosen effect is restored after a reboot.
 - The animation runs in the backend, so lighting keeps going after the GUI is closed. It pauses while the backlight is switched off.
 
 > [!TIP]
-> Single-zone backlights have no geometry for a wave to travel across, so **Flow** behaves like **Rainbow** there — the dropdown says so rather than looking broken.
+> Controls that cannot do anything are not shown: **Flow** is absent on single-zone boards, the colour picker only appears for **Solid**, and the speed slider only for the animated styles.
 
 ---
 
