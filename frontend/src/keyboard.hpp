@@ -32,6 +32,18 @@ private:
   GdkRGBA zone_colors[4];     // Current colors for each zone
   GtkColorDialog *zone_choosers[4];
 
+  // Lighting effects (animated colour)
+  GtkWidget *effect_dropdown;
+  GtkWidget *effect_speed_scale;
+  GtkWidget *effect_speed_row;
+  std::string current_effect;   // STATIC / RAINBOW / BREATHE / FLOW
+  int current_effect_speed;
+  // Drives the on-screen preview so the drawn keyboard animates along with the
+  // real one. Runs locally rather than polling the backend every frame.
+  guint preview_tick_id;
+  double preview_phase;
+  gint64 preview_last_frame_us;
+
   // Preset system
   GtkWidget *preset_dropdown;
   std::map<std::string, std::array<std::string, 4>> presets;
@@ -55,6 +67,12 @@ private:
   void build_ui_for_keyboard_type();
   void update_keyboard_visual();
   void load_presets();
+  void build_effect_controls();
+  void apply_current_effect();
+  void refresh_effect_from_device();
+  void set_effect_controls_sensitive(bool sensitive);
+  void start_preview_animation();
+  void stop_preview_animation();
   void apply_preset(const std::string &preset_name);
   void apply_zone_color_immediately(int zone);
   void save_current_preset(const std::string &preset_name);
@@ -71,6 +89,10 @@ private:
   static void on_apply_color_clicked(GtkWidget *widget, gpointer data);
   static void on_zone_color_changed(GtkColorButton *widget, gpointer data);
   static void on_preset_changed(GtkComboBoxText *widget, gpointer data);
+  static void on_effect_changed(GObject *dropdown, GParamSpec *pspec,
+                                gpointer data);
+  static void on_effect_speed_changed(GtkRange *range, gpointer data);
+  static gboolean on_preview_tick(gpointer data);
   static void on_save_preset_clicked(GtkWidget *widget, gpointer data);
   static void on_remove_preset_clicked(GtkWidget *widget, gpointer data);
   static void update_current_color_label(gpointer data);

@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "effects.hpp"
 #include "fan.hpp"
 #include "keyboard.hpp"
 #include "validation.hpp"
@@ -247,6 +248,22 @@ void handle_command(const std::string &command_str, int client_socket) {
     } else {
       response = "ERROR: Invalid GET_KBD_BRIGHTNESS command format";
     }
+  } else if (command == "SET_KBD_EFFECT") {
+    std::string name;
+    std::string speed;
+    ss >> name >> speed;
+    // speed is optional; omitting it keeps whatever rate is already set.
+    if (!name.empty() && !has_extra_tokens(ss)) {
+      response = set_keyboard_effect(name, speed);
+    } else {
+      response = "ERROR: Invalid SET_KBD_EFFECT command format";
+    }
+  } else if (command == "GET_KBD_EFFECT") {
+    if (!has_extra_tokens(ss)) {
+      response = get_keyboard_effect();
+    } else {
+      response = "ERROR: Invalid GET_KBD_EFFECT command format";
+    }
   } else if (command == "SET_KBD_BRIGHTNESS") {
     std::string value;
     ss >> value;
@@ -344,6 +361,9 @@ int main() {
               << std::endl;
   }
 
+  // Bring back the lighting effect that was running before the last shutdown.
+  restore_keyboard_effect();
+
   while (server_running.load(std::memory_order_acquire)) {
     int client_socket = accept(server_socket, nullptr, nullptr);
     if (client_socket < 0) {
@@ -363,6 +383,7 @@ int main() {
     g_server_socket = -1;
   }
   shutdown_fan_controller();
+  stop_keyboard_effect();
   unlink(SOCKET_PATH);
   std::cout << "Server shut down." << std::endl;
   return 0;

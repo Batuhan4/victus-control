@@ -79,6 +79,8 @@ VictusSocketClient::VictusSocketClient(const std::string &path) : socket_path(pa
       {GET_KEYBOARD_ZONE_COLOR, "GET_KEYBOARD_ZONE_COLOR"},
       {GET_KBD_BRIGHTNESS, "GET_KBD_BRIGHTNESS"},
       {SET_KBD_BRIGHTNESS, "SET_KBD_BRIGHTNESS"},
+      {GET_KBD_EFFECT, "GET_KBD_EFFECT"},
+      {SET_KBD_EFFECT, "SET_KBD_EFFECT"},
       {GET_KEYBOARD_TYPE, "GET_KEYBOARD_TYPE"},
       {GET_CPU_TEMP, "GET_CPU_TEMP"},
       {GET_GPU_TEMP, "GET_GPU_TEMP"},

@@ -1,4 +1,6 @@
 #include "keyboard.hpp"
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <gtk/gtk.h>
@@ -112,6 +114,15 @@ VictusKeyboardControl::VictusKeyboardControl(
   keyboard_enabled = false;
   hovered_zone = -1;       // No zone hovered initially
 
+  effect_dropdown = nullptr;
+  effect_speed_scale = nullptr;
+  effect_speed_row = nullptr;
+  current_effect = "STATIC";
+  current_effect_speed = 50;
+  preview_tick_id = 0;
+  preview_phase = 0.0;
+  preview_last_frame_us = 0;
+
   // Detect keyboard type first
   detect_keyboard_type();
 
@@ -142,6 +153,7 @@ VictusKeyboardControl::VictusKeyboardControl(
   // Update state from device
   update_keyboard_state_from_device();
   update_current_color_label(this);
+  refresh_effect_from_device();
 }
 
 void VictusKeyboardControl::detect_keyboard_type() {
@@ -370,6 +382,9 @@ void VictusKeyboardControl::build_ui_for_keyboard_type() {
     g_signal_connect(apply_button, "clicked",
                      G_CALLBACK(on_apply_color_clicked), this);
   }
+
+  // Animated lighting effects (common for both types)
+  build_effect_controls();
 
   // Status labels (common for both types)
   current_color_label = GTK_LABEL(gtk_label_new("Current Color: #000000"));
@@ -872,4 +887,290 @@ void VictusKeyboardControl::on_remove_preset_clicked(GtkWidget *widget,
     self->remove_preset(std::string(preset_name));
     g_free(preset_name);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Animated lighting effects
+//
+// The backend owns the animation and drives the real keyboard. The controls
+// here select the effect and its speed, and run a matching animation on the
+// drawn keyboard so the preview shows what the hardware is doing without
+// polling the backend every frame.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr int kEffectCount = 4;
+
+// Index order must match kEffectLabels and the dropdown.
+const char *const kEffectCommands[kEffectCount] = {"STATIC", "RAINBOW",
+                                                   "BREATHE", "FLOW"};
+
+// Cycle period at the slowest and fastest speed. Kept in step with the same
+// constants in backend/src/effects.cpp so the preview runs at the rate the
+// keyboard actually animates.
+constexpr double kSlowestPeriodSec = 24.0;
+constexpr double kFastestPeriodSec = 1.2;
+constexpr int kPreviewFrameMs = 33;
+
+// Zones left to right: far left, WASD, middle, right — the path the colour
+// travels along in FLOW.
+constexpr int kFlowOrder[kFourZoneCount] = {2, 3, 1, 0};
+
+double effect_phase_step_per_second(int speed) {
+  double clamped = speed < 1 ? 1 : (speed > 100 ? 100 : speed);
+  double t = (clamped - 1.0) / 99.0;
+  return 1.0 / (kSlowestPeriodSec + t * (kFastestPeriodSec - kSlowestPeriodSec));
+}
+
+GdkRGBA hsv_to_rgba(double hue, double saturation, double value) {
+  hue -= std::floor(hue);
+
+  double sector = hue * 6.0;
+  int index = static_cast<int>(sector) % 6;
+  double fraction = sector - std::floor(sector);
+
+  double p = value * (1.0 - saturation);
+  double q = value * (1.0 - saturation * fraction);
+  double t = value * (1.0 - saturation * (1.0 - fraction));
+
+  GdkRGBA rgba = {0.0f, 0.0f, 0.0f, 1.0f};
+  switch (index) {
+  case 0: rgba.red = value; rgba.green = t;     rgba.blue = p;     break;
+  case 1: rgba.red = q;     rgba.green = value; rgba.blue = p;     break;
+  case 2: rgba.red = p;     rgba.green = value; rgba.blue = t;     break;
+  case 3: rgba.red = p;     rgba.green = q;     rgba.blue = value; break;
+  case 4: rgba.red = t;     rgba.green = p;     rgba.blue = value; break;
+  default: rgba.red = value; rgba.green = p;    rgba.blue = q;     break;
+  }
+  return rgba;
+}
+
+// Inverse of hsv_to_rgba for fully saturated colours: recovers the position in
+// the hue cycle, so the preview can be started in step with the keyboard.
+double rgba_to_hue(const GdkRGBA &color) {
+  double r = color.red, g = color.green, b = color.blue;
+  double max = std::max({r, g, b});
+  double min = std::min({r, g, b});
+  double delta = max - min;
+
+  if (delta <= 0.0)
+    return 0.0;
+
+  double hue;
+  if (max == r)
+    hue = (g - b) / delta;
+  else if (max == g)
+    hue = 2.0 + (b - r) / delta;
+  else
+    hue = 4.0 + (r - g) / delta;
+
+  hue /= 6.0;
+  return hue - std::floor(hue);
+}
+
+} // namespace
+
+void VictusKeyboardControl::build_effect_controls() {
+  GtkWidget *effect_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+  gtk_box_append(GTK_BOX(effect_row), gtk_label_new("Effect:"));
+
+  // FLOW needs zones to travel across, so say so up front on single-zone
+  // hardware rather than letting it silently look like Rainbow.
+  const char *flow_label = (keyboard_type == "FOUR_ZONE")
+                               ? "Flow (river)"
+                               : "Flow (needs 4 zones)";
+  const char *labels[kEffectCount + 1] = {"Static colour", "Rainbow cycle",
+                                          "Breathe", flow_label, nullptr};
+
+  effect_dropdown = gtk_drop_down_new_from_strings(labels);
+  gtk_drop_down_set_selected(GTK_DROP_DOWN(effect_dropdown), 0);
+  gtk_box_append(GTK_BOX(effect_row), effect_dropdown);
+  g_signal_connect(effect_dropdown, "notify::selected",
+                   G_CALLBACK(on_effect_changed), this);
+  gtk_box_append(GTK_BOX(keyboard_page), effect_row);
+
+  effect_speed_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+  gtk_box_append(GTK_BOX(effect_speed_row), gtk_label_new("Speed:"));
+
+  effect_speed_scale =
+      gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 1, 100, 1);
+  gtk_range_set_value(GTK_RANGE(effect_speed_scale), current_effect_speed);
+  gtk_scale_set_draw_value(GTK_SCALE(effect_speed_scale), TRUE);
+  gtk_widget_set_hexpand(effect_speed_scale, TRUE);
+  g_signal_connect(effect_speed_scale, "value-changed",
+                   G_CALLBACK(on_effect_speed_changed), this);
+  gtk_box_append(GTK_BOX(effect_speed_row), effect_speed_scale);
+  gtk_box_append(GTK_BOX(keyboard_page), effect_speed_row);
+
+  // Nothing to set the speed of until an effect is picked.
+  gtk_widget_set_sensitive(effect_speed_row, FALSE);
+}
+
+void VictusKeyboardControl::refresh_effect_from_device() {
+  if (!effect_dropdown)
+    return;
+
+  auto effect_future = socket_client->send_command_async(GET_KBD_EFFECT);
+  std::string reply = effect_future.get();
+  if (reply.find("ERROR") != std::string::npos)
+    return;
+
+  std::istringstream stream(reply);
+  std::string name;
+  int speed = current_effect_speed;
+  stream >> name >> speed;
+
+  int index = 0;
+  for (int i = 0; i < kEffectCount; i++) {
+    if (name == kEffectCommands[i]) {
+      index = i;
+      break;
+    }
+  }
+
+  current_effect = kEffectCommands[index];
+  current_effect_speed = (speed < 1 || speed > 100) ? 50 : speed;
+
+  // Reflect the backend's state without echoing it straight back at it.
+  g_signal_handlers_block_by_func(effect_dropdown,
+                                  (gpointer)G_CALLBACK(on_effect_changed), this);
+  gtk_drop_down_set_selected(GTK_DROP_DOWN(effect_dropdown), index);
+  g_signal_handlers_unblock_by_func(
+      effect_dropdown, (gpointer)G_CALLBACK(on_effect_changed), this);
+
+  g_signal_handlers_block_by_func(
+      effect_speed_scale, (gpointer)G_CALLBACK(on_effect_speed_changed), this);
+  gtk_range_set_value(GTK_RANGE(effect_speed_scale), current_effect_speed);
+  g_signal_handlers_unblock_by_func(
+      effect_speed_scale, (gpointer)G_CALLBACK(on_effect_speed_changed), this);
+
+  bool animating = current_effect != "STATIC";
+  gtk_widget_set_sensitive(effect_speed_row, animating);
+  if (animating)
+    start_preview_animation();
+}
+
+void VictusKeyboardControl::apply_current_effect() {
+  std::string argument =
+      current_effect + " " + std::to_string(current_effect_speed);
+  auto result_future =
+      socket_client->send_command_async(SET_KBD_EFFECT, argument);
+  std::string result = result_future.get();
+
+  if (result.find("ERROR") != std::string::npos) {
+    std::cerr << "Failed to set keyboard effect: " << result << std::endl;
+    return;
+  }
+
+  bool animating = current_effect != "STATIC";
+  gtk_widget_set_sensitive(effect_speed_row, animating);
+
+  if (animating) {
+    start_preview_animation();
+  } else {
+    stop_preview_animation();
+    // Fall back to whatever colour the keyboard settled on.
+    update_keyboard_state_from_device();
+    update_current_color_label(this);
+    gtk_widget_queue_draw(keyboard_visual);
+  }
+}
+
+void VictusKeyboardControl::start_preview_animation() {
+  if (preview_tick_id != 0)
+    return;
+
+  // The hue cycles map phase directly onto colour, so reading back what the
+  // keyboard is showing puts the preview at the same point in the cycle rather
+  // than starting from an arbitrary one. BREATHE's phase is a brightness ramp,
+  // not a hue, so there is nothing to recover for it.
+  if (current_effect == "RAINBOW" || current_effect == "FLOW") {
+    auto color_future = socket_client->send_command_async(GET_KEYBOARD_COLOR);
+    GdkRGBA shown;
+    if (parse_rgb_triplet(color_future.get(), &shown))
+      preview_phase = rgba_to_hue(shown);
+  }
+
+  preview_last_frame_us = g_get_monotonic_time();
+  preview_tick_id = g_timeout_add(kPreviewFrameMs, on_preview_tick, this);
+}
+
+void VictusKeyboardControl::stop_preview_animation() {
+  if (preview_tick_id == 0)
+    return;
+
+  g_source_remove(preview_tick_id);
+  preview_tick_id = 0;
+}
+
+gboolean VictusKeyboardControl::on_preview_tick(gpointer data) {
+  VictusKeyboardControl *self = static_cast<VictusKeyboardControl *>(data);
+
+  gint64 now_us = g_get_monotonic_time();
+  double elapsed = (now_us - self->preview_last_frame_us) / 1000000.0;
+  self->preview_last_frame_us = now_us;
+
+  self->preview_phase +=
+      elapsed * effect_phase_step_per_second(self->current_effect_speed);
+  self->preview_phase -= std::floor(self->preview_phase);
+
+  // While the backlight is off the drawn keyboard shows its off state; there is
+  // nothing to preview until it is switched back on.
+  if (!self->keyboard_enabled)
+    return G_SOURCE_CONTINUE;
+
+  double phase = self->preview_phase;
+
+  if (self->current_effect == "BREATHE") {
+    double level = 0.15 + 0.85 * (0.5 - 0.5 * std::cos(2.0 * M_PI * phase));
+    GdkRGBA base = self->current_single_color;
+    GdkRGBA faded = {static_cast<float>(base.red * level),
+                     static_cast<float>(base.green * level),
+                     static_cast<float>(base.blue * level), 1.0f};
+    for (int zone = 0; zone < kFourZoneCount; zone++)
+      self->zone_colors[zone] = faded;
+    if (self->keyboard_type != "FOUR_ZONE")
+      self->current_single_color = faded;
+  } else if (self->current_effect == "FLOW" &&
+             self->keyboard_type == "FOUR_ZONE") {
+    for (int position = 0; position < kFourZoneCount; position++) {
+      double zone_phase = phase + static_cast<double>(position) / kFourZoneCount;
+      self->zone_colors[kFlowOrder[position]] = hsv_to_rgba(zone_phase, 1.0, 1.0);
+    }
+  } else {
+    GdkRGBA color = hsv_to_rgba(phase, 1.0, 1.0);
+    for (int zone = 0; zone < kFourZoneCount; zone++)
+      self->zone_colors[zone] = color;
+    self->current_single_color = color;
+  }
+
+  gtk_widget_queue_draw(self->keyboard_visual);
+  return G_SOURCE_CONTINUE;
+}
+
+void VictusKeyboardControl::on_effect_changed(GObject *dropdown,
+                                              GParamSpec * /*pspec*/,
+                                              gpointer data) {
+  VictusKeyboardControl *self = static_cast<VictusKeyboardControl *>(data);
+
+  guint selected = gtk_drop_down_get_selected(GTK_DROP_DOWN(dropdown));
+  if (selected >= static_cast<guint>(kEffectCount))
+    return;
+
+  // BREATHE pulses whatever colour is currently set, so hand the backend the
+  // colour the user last chose before starting it.
+  self->current_effect = kEffectCommands[selected];
+  self->apply_current_effect();
+}
+
+void VictusKeyboardControl::on_effect_speed_changed(GtkRange *range,
+                                                    gpointer data) {
+  VictusKeyboardControl *self = static_cast<VictusKeyboardControl *>(data);
+
+  self->current_effect_speed = static_cast<int>(gtk_range_get_value(range));
+  if (self->current_effect == "STATIC")
+    return;
+
+  self->apply_current_effect();
 }

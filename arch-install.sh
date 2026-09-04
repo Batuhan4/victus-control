@@ -187,6 +187,7 @@ install_helpers_and_sudoers() {
     install -m 0755 backend/src/set-fan-speed.sh /usr/bin/set-fan-speed.sh
     install -m 0755 backend/src/set-fan-mode.sh /usr/bin/set-fan-mode.sh
     install -m 0755 backend/src/set-rgb-zone.sh /usr/bin/set-rgb-zone.sh
+    install -m 0755 backend/src/set-rgb-zones.sh /usr/bin/set-rgb-zones.sh
     rm -f /etc/sudoers.d/victus-fan-sudoers
     install -m 0440 victus-control-sudoers /etc/sudoers.d/victus-control-sudoers
     if command -v visudo >/dev/null 2>&1; then

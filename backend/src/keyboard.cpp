@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "effects.hpp"
 #include "keyboard.hpp"
 #include "validation.hpp"
 
@@ -215,6 +216,10 @@ std::string get_keyboard_zone_color(int zone) {
 }
 
 std::string set_keyboard_color(const std::string &color) {
+  // An explicit colour choice wins over a running animation, which would
+  // otherwise repaint over it on the very next frame.
+  stop_keyboard_effect();
+
   std::array<int, 3> rgb_values;
   if (!parse_rgb_triplet(color, &rgb_values))
     return "ERROR: Invalid RGB color";
@@ -251,6 +256,8 @@ std::string set_keyboard_color(const std::string &color) {
 }
 
 std::string set_keyboard_zone_color(int zone, const std::string &color) {
+  stop_keyboard_effect();
+
   if (zone < 0 || zone >= kFourZoneCount)
     return "ERROR: Invalid zone";
 
@@ -350,4 +357,114 @@ std::string set_keyboard_brightness(const std::string &value) {
   }
 
   return "ERROR: Keyboard Brightness File not found";
+}
+
+namespace {
+
+constexpr const char *kRgbZonesBatchWriterPath = "/usr/bin/set-rgb-zones.sh";
+
+bool write_text_file(const std::string &path, const std::string &value) {
+  std::ofstream file(path);
+  if (!file)
+    return false;
+
+  file << value;
+  file.flush();
+  return !file.fail();
+}
+
+// Whether the four zone files can be written directly. Probed once: an
+// animation frame must not pay for four access() calls, and the answer only
+// changes when udev rules do, which needs a reload anyway.
+bool fourzone_direct_writes_available() {
+  static const bool available = [] {
+    for (int zone = 0; zone < kFourZoneCount; zone++) {
+      if (access(fourzone_zone_path(zone).c_str(), W_OK) != 0)
+        return false;
+    }
+    return true;
+  }();
+  return available;
+}
+
+std::string write_fourzone_frame(const std::array<std::string, kFourZoneCount> &hex) {
+  // Fast path: no sudo, no fork, and no journal entry per frame.
+  if (fourzone_direct_writes_available()) {
+    for (int zone = 0; zone < kFourZoneCount; zone++) {
+      if (!write_text_file(fourzone_zone_path(zone), hex[static_cast<size_t>(zone)]))
+        return "ERROR: Failed to set zone color";
+    }
+    return "OK";
+  }
+
+  // Otherwise push all four zones through one helper invocation. Doing this
+  // per-zone would mean four sudo execs for every frame of the animation.
+  struct stat buffer;
+  if (stat(kRgbZonesBatchWriterPath, &buffer) == 0) {
+    int status = run_helper_command({kSudoPath, kRgbZonesBatchWriterPath, hex[0],
+                                     hex[1], hex[2], hex[3]});
+    if (status == 0)
+      return "OK";
+    return "ERROR: Failed to set zone color";
+  }
+
+  // Older install without the batch helper: fall back to the per-zone script.
+  for (int zone = 0; zone < kFourZoneCount; zone++) {
+    std::string result =
+        write_rgb_zone_with_helper(zone, hex[static_cast<size_t>(zone)]);
+    if (result != "OK")
+      return result;
+  }
+  return "OK";
+}
+
+} // namespace
+
+int keyboard_zone_count() { return omen_4zone_exists() ? kFourZoneCount : 1; }
+
+std::array<int, 3> current_keyboard_rgb() {
+  std::array<int, 3> rgb{255, 255, 255};
+
+  if (omen_4zone_exists()) {
+    std::string hex = read_text_file(kFourZoneZone0Path);
+    if (parse_hex_color(hex, &rgb))
+      return rgb;
+    return {255, 255, 255};
+  }
+
+  if (parse_rgb_triplet(read_text_file(kSingleZoneColorPath), &rgb))
+    return rgb;
+
+  return {255, 255, 255};
+}
+
+std::string write_keyboard_colors_raw(const std::vector<std::string> &rgb_triplets) {
+  if (rgb_triplets.empty())
+    return "ERROR: No colors supplied";
+
+  if (omen_4zone_exists()) {
+    if (rgb_triplets.size() < static_cast<size_t>(kFourZoneCount))
+      return "ERROR: Expected four zone colors";
+
+    std::array<std::string, kFourZoneCount> hex;
+    for (int zone = 0; zone < kFourZoneCount; zone++) {
+      hex[static_cast<size_t>(zone)] =
+          rgb_triplet_to_hex(rgb_triplets[static_cast<size_t>(zone)]);
+      if (hex[static_cast<size_t>(zone)].empty())
+        return "ERROR: Invalid RGB color";
+    }
+
+    return write_fourzone_frame(hex);
+  }
+
+  std::array<int, 3> rgb;
+  if (!parse_rgb_triplet(rgb_triplets.front(), &rgb))
+    return "ERROR: Invalid RGB color";
+
+  if (!write_text_file(kSingleZoneColorPath, std::to_string(rgb[0]) + " " +
+                                                 std::to_string(rgb[1]) + " " +
+                                                 std::to_string(rgb[2])))
+    return "ERROR: Failed to write RGB color";
+
+  return "OK";
 }

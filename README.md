@@ -15,7 +15,7 @@ Fan control and keyboard lighting for HP Victus / Omen laptops on Linux. Stock f
 ## Why victus-control
 - **Better Auto mode** (selectable from the GTK UI or CLI) samples CPU/GPU temps & utilisation every ~2 s, clamps to each fan’s hardware max, and reapplies targets every 90 s with the firmware-required 10 s stagger. Result: fans climb smoothly with load instead of idling at 2000 RPM like HP’s AUTO.
 - **Manual mode** exposes eight RPM steps (~2000 ➜ 5800/6100 RPM) with per-fan precision and watchdog refreshes that keep settings alive through firmware quirks.
-- **Keyboard lighting** supports single-zone RGB colour and brightness on compatible hardware.
+- **Keyboard lighting** supports single-zone RGB colour and brightness on compatible hardware, plus animated rainbow / breathe / flow effects.
 - **GNOME Shell integration** exposes fan and keyboard controls from the top panel.
 
 ## Support Matrix
@@ -76,7 +76,18 @@ The installer handles dependency install, user/group creation, DKMS module regis
 - Mode dropdown offers `AUTO`, `Better Auto`, `MANUAL`, `MAX`:
   - *Better Auto* is enforced by the background service on each boot, keeps fans in manual PWM, and dynamically adjusts RPMs based on temps/utilisation—ideal for gaming or heavy workloads.
   - *Manual* maps slider positions to calibrated RPM steps; fan 2 honours the 10 s offset automatically.
-- Keyboard tab exposes RGB colour + brightness controls.
+- Keyboard tab exposes RGB colour + brightness controls, plus **animated lighting effects**:
+  - *Static colour* — one fixed colour (the classic behaviour).
+  - *Rainbow cycle* — the whole keyboard walks the hue wheel.
+  - *Breathe* — the current colour fades in and out.
+  - *Flow (river)* — on four-zone Omen keyboards the hue travels left-to-right
+    across the zones so the colour appears to flow along the board. Single-zone
+    backlights have no geometry for a wave to travel across, so this behaves
+    like *Rainbow* there and the dropdown says so.
+  - The *Speed* slider (1-100) sets the cycle rate. Picking a static colour
+    stops the animation, and the chosen effect is restored after a reboot.
+  - The animation runs in the backend, so the lighting keeps going after the
+    GUI is closed. It pauses while the backlight is switched off.
 - Backend status: `systemctl status victus-backend.service` (logs via `journalctl -u victus-backend`).
 
 ## GNOME Shell Extension
