@@ -12,6 +12,9 @@ Restart=always
 RestartSec=5
 User=victus-backend
 Group=victus
+# Gives the service /var/lib/victus-control to remember the lighting effect
+# across reboots (exported to it as $STATE_DIRECTORY).
+StateDirectory=victus-control
 
 [Install]
 WantedBy=multi-user.target

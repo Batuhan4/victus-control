@@ -4,7 +4,7 @@ iconscalabledir = join_paths(datadir, 'icons', 'hicolor', 'scalable', 'apps')
 pixmapsdir = join_paths(datadir, 'pixmaps')
 
 executable('victus-control',
-  sources: ['src/main.cpp', 'src/keyboard.cpp', 'src/fan.cpp', 'src/about.cpp', 'src/socket.cpp'],
+  sources: ['src/main.cpp', 'src/keyboard.cpp', 'src/fan.cpp', 'src/about.cpp', 'src/socket.cpp', 'src/style.cpp', 'src/gauges.cpp'],
   dependencies: [dependency('gtk4'), dependency('threads')],
   cpp_args: ['-DDATADIR="' + datadir + '"'],
   install: true,
