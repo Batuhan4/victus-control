@@ -134,6 +134,19 @@ sudo meson install -C build
 - **Fans ignore commands**: ensure the DKMS module is loaded (`dkms status | grep hp-wmi-fan-and-backlight-control`, `modprobe --show-depends hp_wmi | tail -n1` should point at the DKMS-built `hp-wmi.ko` under `/updates/dkms/` on Arch or `/extra/` on other distros).
 - **Permission errors**: confirm `victus` group membership (`groups $USER`), then re-run the installer or `sudo usermod -aG victus $USER`.
 - **Socket missing**: `sudo systemd-tmpfiles --create`; `sudo systemctl restart victus-backend.service`.
+- **Fans stuck at one speed after the service starts**: a few boards report
+  software fan support but have a BIOS that ignores per-RPM targets. The Better
+  Auto loop then switches the fans to MANUAL and cannot set a speed, leaving
+  them pinned with the firmware curve disabled. Check with
+  `cat /sys/devices/platform/hp-wmi/hwmon/hwmon*/fan1_target` — if that returns
+  `Invalid argument` while writes appear to succeed, your board is affected.
+  Keep the keyboard lighting and leave the fans to the firmware with:
+  ```bash
+  sudo mkdir -p /etc/systemd/system/victus-backend.service.d
+  printf '[Service]\nEnvironment=VICTUS_NO_FAN_CONTROL=1\n' | \
+    sudo tee /etc/systemd/system/victus-backend.service.d/no-fan-control.conf
+  sudo systemctl daemon-reload && sudo systemctl restart victus-backend
+  ```
 - **GNOME extension missing after install**: log out/in once, then run `gnome-extensions enable victus-control@victus`.
 - **Uninstall**: `sudo systemctl disable --now victus-backend` and `sudo dkms remove hp-wmi-fan-and-backlight-control/$(dkms status -m hp-wmi-fan-and-backlight-control | sed -n 's#.*/\([^,]*\),.*#\1#p' | head -n1) --all` (or substitute the version shown by `dkms status`).
 

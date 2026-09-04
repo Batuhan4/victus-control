@@ -1,5 +1,6 @@
 #include <atomic>
 #include <csignal>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -355,10 +356,22 @@ int main() {
 
   std::cout << "Server is listening..." << std::endl;
 
-  auto ensure_result = ensure_better_auto_mode();
-  if (ensure_result != "OK") {
-    std::cerr << "Failed to enforce initial BETTER_AUTO mode: " << ensure_result
+  // Some boards report software fan support but have a BIOS that ignores
+  // per-RPM targets. There the Better Auto loop switches the fans to MANUAL and
+  // then cannot set a speed, which leaves them pinned with the BIOS curve
+  // disabled. VICTUS_NO_FAN_CONTROL=1 keeps the backend serving keyboard
+  // lighting while leaving the fans entirely to the firmware.
+  const char *no_fan_control = std::getenv("VICTUS_NO_FAN_CONTROL");
+  if (no_fan_control != nullptr && std::string(no_fan_control) == "1") {
+    std::cout << "Fan control disabled (VICTUS_NO_FAN_CONTROL=1); "
+                 "leaving fans under firmware control."
               << std::endl;
+  } else {
+    auto ensure_result = ensure_better_auto_mode();
+    if (ensure_result != "OK") {
+      std::cerr << "Failed to enforce initial BETTER_AUTO mode: "
+                << ensure_result << std::endl;
+    }
   }
 
   // Bring back the lighting effect that was running before the last shutdown.
