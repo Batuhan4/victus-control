@@ -47,29 +47,6 @@ void apply_temperature_class(GtkWidget *label, const std::string &value)
     }
 }
 
-GtkWidget *make_card(const char *title, const char *icon_name)
-{
-    GtkWidget *card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
-    gtk_widget_add_css_class(card, "victus-card");
-
-    if (title != nullptr) {
-        // Symbolic icons come from the icon theme rather than a bundled icon
-        // font, so they inherit the accent colour and need no extra assets.
-        GtkWidget *heading_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-        GtkWidget *icon = gtk_image_new_from_icon_name(icon_name);
-        gtk_widget_add_css_class(icon, "section-icon");
-
-        GtkWidget *heading = gtk_label_new(title);
-        gtk_widget_add_css_class(heading, "section-title");
-
-        gtk_box_append(GTK_BOX(heading_row), icon);
-        gtk_box_append(GTK_BOX(heading_row), heading);
-        gtk_widget_set_halign(heading_row, GTK_ALIGN_START);
-        gtk_box_append(GTK_BOX(card), heading_row);
-    }
-    return card;
-}
-
 // One telemetry dial: caption, the analog gauge, then the digital value under
 // it, so the shape gives the impression and the number gives the detail.
 GtkWidget *make_gauge_tile(const char *caption, const char *unit,
@@ -113,41 +90,6 @@ GtkWidget *make_gauge_tile(const char *caption, const char *unit,
     gtk_box_append(GTK_BOX(tile), value_row);
 
     *gauge_out = gauge;
-    *value_out = value;
-    return tile;
-}
-
-// One telemetry tile: a small caption over a large monospace value.
-GtkWidget *make_stat_tile(const char *caption, const char *unit,
-                          const char *icon_name, GtkWidget **value_out)
-{
-    GtkWidget *tile = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-    gtk_widget_set_hexpand(tile, TRUE);
-
-    GtkWidget *caption_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    GtkWidget *caption_icon = gtk_image_new_from_icon_name(icon_name);
-    gtk_widget_add_css_class(caption_icon, "tile-icon");
-    GtkWidget *caption_label = gtk_label_new(caption);
-    gtk_widget_add_css_class(caption_label, "field-label");
-    gtk_box_append(GTK_BOX(caption_row), caption_icon);
-    gtk_box_append(GTK_BOX(caption_row), caption_label);
-    gtk_widget_set_halign(caption_row, GTK_ALIGN_START);
-
-    GtkWidget *value_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
-    GtkWidget *value = gtk_label_new("--");
-    gtk_widget_add_css_class(value, "readout");
-    gtk_widget_set_halign(value, GTK_ALIGN_START);
-
-    GtkWidget *unit_label = gtk_label_new(unit);
-    gtk_widget_add_css_class(unit_label, "readout-unit");
-    gtk_widget_set_valign(unit_label, GTK_ALIGN_END);
-    gtk_widget_set_margin_bottom(unit_label, 4);
-
-    gtk_box_append(GTK_BOX(value_row), value);
-    gtk_box_append(GTK_BOX(value_row), unit_label);
-    gtk_box_append(GTK_BOX(tile), caption_row);
-    gtk_box_append(GTK_BOX(tile), value_row);
-
     *value_out = value;
     return tile;
 }
@@ -222,20 +164,35 @@ VictusFanControl::VictusFanControl(std::shared_ptr<VictusSocketClient> client) :
     gtk_box_append(GTK_BOX(fan_page), state_label);
 
     // Boards whose firmware refuses software fan control never expose
-    // fan*_target. Manual speed cannot work there, so the control is removed
-    // rather than shown greyed out, and MANUAL is dropped from the profiles.
+    // fan*_target, so neither manual speed nor Better Auto (which steers the
+    // fans through the same targets) can work there: both are removed rather
+    // than shown greyed out. With VICTUS_NO_FAN_CONTROL=1 the backend leaves
+    // the fans to the firmware altogether, so the profile selector is locked
+    // and the card is telemetry only.
+    std::string support;
     {
-        auto support = socket_client->send_command_async(GET_FAN_TARGET_SUPPORT);
-        fan_targets_supported = (support.get() == "SUPPORTED");
+        auto reply = socket_client->send_command_async(GET_FAN_TARGET_SUPPORT);
+        support = reply.get();
     }
+    fan_targets_supported = (support == "SUPPORTED");
+    const bool fan_control_disabled = (support == "DISABLED");
 
     if (!fan_targets_supported) {
         gtk_widget_set_visible(manual_speed_box, FALSE);
+        // Remove the higher index first so the lower one keeps its position.
         gtk_combo_box_text_remove(GTK_COMBO_BOX_TEXT(mode_selector), 2);  // MANUAL
+        gtk_combo_box_text_remove(GTK_COMBO_BOX_TEXT(mode_selector), 1);  // Better Auto
+        if (fan_control_disabled)
+            gtk_widget_set_sensitive(mode_selector, FALSE);
 
-        GtkWidget *notice = gtk_label_new(
-            "This board's firmware does not accept fan speed targets, so manual "
-            "speed is unavailable. AUTO, Better Auto and MAX still work.");
+        const char *text = fan_control_disabled
+            ? "Fan control is switched off for this machine "
+              "(VICTUS_NO_FAN_CONTROL=1), so the firmware runs the fans. "
+              "Speeds and temperatures are still shown."
+            : "This board's firmware does not accept fan speed targets, so "
+              "manual speed and Better Auto are unavailable. AUTO and MAX "
+              "still work.";
+        GtkWidget *notice = gtk_label_new(text);
         gtk_label_set_wrap(GTK_LABEL(notice), TRUE);
         gtk_widget_add_css_class(notice, "notice");
         gtk_box_append(GTK_BOX(fan_page), notice);
