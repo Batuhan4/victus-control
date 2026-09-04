@@ -1,4 +1,5 @@
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <cstdio>
@@ -39,6 +40,14 @@ constexpr const char *kSudoPath = "/usr/bin/sudo";
 // global (and interleave the per-zone hardware writes).
 std::optional<std::array<std::string, kFourZoneCount>> g_fourzone_saved_colors;
 std::mutex g_fourzone_mutex;
+
+// Explicit power state for four-zone boards, which have no brightness knob of
+// their own. Set by SET_KBD_BRIGHTNESS 0, cleared by a non-zero brightness or
+// an explicit colour write. The animation engine drops its frames while this
+// is set (see write_keyboard_colors_raw), so switching the backlight off
+// sticks even though the effect keeps running underneath, and it resumes the
+// moment the backlight is switched back on.
+std::atomic<bool> g_fourzone_off{false};
 
 bool omen_4zone_exists() {
   struct stat buffer;
@@ -216,13 +225,14 @@ std::string get_keyboard_zone_color(int zone) {
 }
 
 std::string set_keyboard_color(const std::string &color) {
-  // An explicit colour choice wins over a running animation, which would
-  // otherwise repaint over it on the very next frame.
-  stop_keyboard_effect();
-
   std::array<int, 3> rgb_values;
   if (!parse_rgb_triplet(color, &rgb_values))
     return "ERROR: Invalid RGB color";
+
+  // An explicit colour choice wins over a running animation, which would
+  // otherwise repaint over it on the very next frame. Stopped before taking
+  // g_fourzone_mutex: stopping joins the worker, which may be waiting for it.
+  stop_keyboard_effect();
 
   std::string canonical_color = std::to_string(rgb_values[0]) + " " +
                                 std::to_string(rgb_values[1]) + " " +
@@ -233,12 +243,15 @@ std::string set_keyboard_color(const std::string &color) {
     if (hex_val.empty())
       return "ERROR: Invalid RGB color";
 
+    std::lock_guard<std::mutex> lock(g_fourzone_mutex);
     for (int zone = 0; zone < kFourZoneCount; zone++) {
       std::string result = write_rgb_zone_with_helper(zone, hex_val);
       if (result != "OK")
         return result;
     }
 
+    // The keyboard is visibly lit again, whatever the switch said before.
+    g_fourzone_off.store(false, std::memory_order_release);
     return "OK";
   }
 
@@ -256,14 +269,14 @@ std::string set_keyboard_color(const std::string &color) {
 }
 
 std::string set_keyboard_zone_color(int zone, const std::string &color) {
-  stop_keyboard_effect();
-
   if (zone < 0 || zone >= kFourZoneCount)
     return "ERROR: Invalid zone";
 
   std::array<int, 3> rgb_values;
   if (!parse_rgb_triplet(color, &rgb_values))
     return "ERROR: Invalid RGB color";
+
+  stop_keyboard_effect();
 
   std::string canonical_color = std::to_string(rgb_values[0]) + " " +
                                 std::to_string(rgb_values[1]) + " " +
@@ -274,15 +287,25 @@ std::string set_keyboard_zone_color(int zone, const std::string &color) {
     if (hex_val.empty())
       return "ERROR: Invalid RGB color";
 
-    return write_rgb_zone_with_helper(zone, hex_val);
+    std::lock_guard<std::mutex> lock(g_fourzone_mutex);
+    std::string result = write_rgb_zone_with_helper(zone, hex_val);
+    if (result == "OK")
+      g_fourzone_off.store(false, std::memory_order_release);
+    return result;
   }
 
   return set_keyboard_color(canonical_color);
 }
 
 std::string get_keyboard_brightness() {
-  if (omen_4zone_exists())
+  if (omen_4zone_exists()) {
+    // While switched off the zones are black by construction, and a running
+    // animation is not painting them, so the flag is the truth. Otherwise
+    // infer it from the colours, which also covers a board that boots dark.
+    if (g_fourzone_off.load(std::memory_order_acquire))
+      return "0";
     return fourzone_brightness_value();
+  }
 
   std::ifstream brightness(kSingleZoneBrightnessPath);
   if (brightness) {
@@ -325,6 +348,9 @@ std::string set_keyboard_brightness(const std::string &value) {
       if (any_lit)
         g_fourzone_saved_colors = stashed;
 
+      // Flagged before the zones go dark so no animation frame lands after
+      // them; the mutex keeps a frame already in flight ahead of this write.
+      g_fourzone_off.store(true, std::memory_order_release);
       for (int zone = 0; zone < kFourZoneCount; zone++) {
         std::string result = write_rgb_zone_with_helper(zone, "000000");
         if (result != "OK")
@@ -333,13 +359,18 @@ std::string set_keyboard_brightness(const std::string &value) {
       return "OK";
     }
 
-    // Non-zero brightness: restore the stashed colors if we have them.
-    if (!g_fourzone_saved_colors)
-      return "OK"; // nothing to restore; leave whatever is set
+    // Non-zero brightness: bring the stashed colours back, or light the zones
+    // white when nothing was stashed so a board that booted dark visibly
+    // switches on rather than staying black. A running animation resumes on
+    // its next frame either way.
+    g_fourzone_off.store(false, std::memory_order_release);
+    std::array<std::string, kFourZoneCount> colors;
+    colors.fill("FFFFFF");
+    if (g_fourzone_saved_colors)
+      colors = *g_fourzone_saved_colors;
 
     for (int zone = 0; zone < kFourZoneCount; zone++) {
-      std::string result =
-          write_rgb_zone_with_helper(zone, (*g_fourzone_saved_colors)[zone]);
+      std::string result = write_rgb_zone_with_helper(zone, colors[zone]);
       if (result != "OK")
         return result;
     }
@@ -373,18 +404,15 @@ bool write_text_file(const std::string &path, const std::string &value) {
   return !file.fail();
 }
 
-// Whether the four zone files can be written directly. Probed once: an
-// animation frame must not pay for four access() calls, and the answer only
-// changes when udev rules do, which needs a reload anyway.
+// Whether the four zone files can be written directly. Checked on every
+// frame: four access() calls cost microseconds, and the answer changes without
+// a restart when the udev rule is applied after the service has started.
 bool fourzone_direct_writes_available() {
-  static const bool available = [] {
-    for (int zone = 0; zone < kFourZoneCount; zone++) {
-      if (access(fourzone_zone_path(zone).c_str(), W_OK) != 0)
-        return false;
-    }
-    return true;
-  }();
-  return available;
+  for (int zone = 0; zone < kFourZoneCount; zone++) {
+    if (access(fourzone_zone_path(zone).c_str(), W_OK) != 0)
+      return false;
+  }
+  return true;
 }
 
 std::string write_fourzone_frame(const std::array<std::string, kFourZoneCount> &hex) {
@@ -399,6 +427,16 @@ std::string write_fourzone_frame(const std::array<std::string, kFourZoneCount> &
 
   // Otherwise push all four zones through one helper invocation. Doing this
   // per-zone would mean four sudo execs for every frame of the animation.
+  // Say so once: a service that stays on this path forks sudo for every
+  // frame, which is worth a line in the journal explaining why.
+  static std::once_flag fallback_notice;
+  std::call_once(fallback_notice, [] {
+    std::cerr << "four-zone lighting: the zone files are not writable by the "
+                 "service, so animation frames go through the privileged helper "
+                 "until the udev rule applies (re-run the installer or reboot)"
+              << std::endl;
+  });
+
   struct stat buffer;
   if (stat(kRgbZonesBatchWriterPath, &buffer) == 0) {
     int status = run_helper_command({kSudoPath, kRgbZonesBatchWriterPath, hex[0],
@@ -453,6 +491,14 @@ std::string write_keyboard_colors_raw(const std::vector<std::string> &rgb_triple
       if (hex[static_cast<size_t>(zone)].empty())
         return "ERROR: Invalid RGB color";
     }
+
+    // Serialised with the on/off toggle so a frame can neither interleave
+    // with the zones being blacked out nor land after they were. While the
+    // backlight is off the frame is simply dropped; the animation carries on
+    // and paints again once it is switched on.
+    std::lock_guard<std::mutex> lock(g_fourzone_mutex);
+    if (g_fourzone_off.load(std::memory_order_acquire))
+      return "OK";
 
     return write_fourzone_frame(hex);
   }

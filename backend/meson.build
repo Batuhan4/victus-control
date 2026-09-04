@@ -12,6 +12,15 @@ backend_validation_test = executable(
 
 test('backend-validation', backend_validation_test)
 
+backend_fan_support_test = executable(
+  'backend-fan-support-test',
+  sources: ['tests/fan_support_test.cpp', 'src/fan.cpp', 'src/fan.hpp', 'src/util.cpp', 'src/util.hpp', 'src/validation.cpp', 'src/validation.hpp'],
+  include_directories: include_directories('src'),
+  dependencies: [dependency('threads')],
+  install: false)
+
+test('backend-fan-support', backend_fan_support_test)
+
 install_data(
 	'victus-backend.service',
 	install_dir: '/etc/systemd/system'

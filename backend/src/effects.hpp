@@ -26,9 +26,14 @@ std::string set_keyboard_effect(const std::string &name,
 // Returns "<NAME> <SPEED>", e.g. "FLOW 60".
 std::string get_keyboard_effect();
 
-// Stops the animation thread. Safe to call when nothing is running.
-// Called when a static colour is set, and on shutdown.
+// Stops the animation thread and records STATIC as the chosen state, so the
+// choice survives a restart. Safe to call when nothing is running. Called when
+// a static colour is set.
 void stop_keyboard_effect();
+
+// Stops the animation thread without touching the saved state, so the effect
+// that was running comes back on the next start. Called on shutdown.
+void shutdown_keyboard_effect();
 
 // Restarts whatever effect was running when the service last stopped, so the
 // lighting survives a reboot. Does nothing if no state was saved.

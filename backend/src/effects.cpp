@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <iostream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -34,6 +35,11 @@ constexpr double kFastestPeriodSec = 1.2;
 // The keyboard is checked for being switched off this often. Repainting a dark
 // keyboard would be wasted EC traffic, so frames are skipped while it is off.
 constexpr auto kBrightnessPollInterval = std::chrono::milliseconds(500);
+
+// Frames that fail in a row before the worker gives up. A missing sysfs file,
+// a permission problem or a broken helper does not fix itself between frames,
+// and retrying at frame rate would only fill the journal.
+constexpr int kMaxConsecutiveWriteFailures = 3;
 
 // Zone indices in left-to-right order: far left, WASD, middle, right.
 // The wave is offset along this path, so the colour travels across the board
@@ -193,6 +199,7 @@ void effect_loop() {
   auto last_frame = std::chrono::steady_clock::now();
   auto last_brightness_check = last_frame - kBrightnessPollInterval;
   bool paused = false;
+  int failures = 0;
 
   while (g_running.load(std::memory_order_acquire)) {
     auto now = std::chrono::steady_clock::now();
@@ -211,7 +218,17 @@ void effect_loop() {
 
     if (!paused) {
       Effect effect = static_cast<Effect>(g_effect.load(std::memory_order_relaxed));
-      write_keyboard_colors_raw(frame_colors(effect, phase, zone_count));
+      std::string result =
+          write_keyboard_colors_raw(frame_colors(effect, phase, zone_count));
+      if (result == "OK") {
+        failures = 0;
+      } else if (++failures >= kMaxConsecutiveWriteFailures) {
+        // The saved state keeps the effect, so it is tried again on the next
+        // start once whatever blocked the writes has been fixed.
+        std::cerr << "keyboard effect stopped: " << result << std::endl;
+        g_running.store(false, std::memory_order_release);
+        break;
+      }
     }
 
     std::unique_lock<std::mutex> lock(g_sleep_mutex);
@@ -283,11 +300,15 @@ std::string set_keyboard_effect(const std::string &name,
 
   // Already animating: swap the effect in place so the phase keeps running and
   // the transition does not stutter.
-  if (g_thread.joinable()) {
+  if (g_running.load(std::memory_order_acquire)) {
     g_effect.store(static_cast<int>(effect), std::memory_order_relaxed);
     save_effect_state(effect, speed_value);
     return "OK";
   }
+
+  // A worker that gave up after repeated write failures is still joinable;
+  // collect it before starting afresh.
+  stop_locked();
 
   g_effect.store(static_cast<int>(effect), std::memory_order_relaxed);
   g_running.store(true, std::memory_order_release);
@@ -298,7 +319,7 @@ std::string set_keyboard_effect(const std::string &name,
 
 std::string get_keyboard_effect() {
   std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
-  Effect effect = g_thread.joinable()
+  Effect effect = g_running.load(std::memory_order_acquire)
                       ? static_cast<Effect>(g_effect.load(std::memory_order_relaxed))
                       : Effect::Static;
   return std::string(effect_name(effect)) + " " +
@@ -306,6 +327,17 @@ std::string get_keyboard_effect() {
 }
 
 void stop_keyboard_effect() {
+  std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+  bool had_effect = g_thread.joinable();
+  stop_locked();
+
+  // An explicit static colour is a choice too: remember it, so the next start
+  // does not bring the old animation back over it.
+  if (had_effect)
+    save_effect_state(Effect::Static, g_speed.load(std::memory_order_relaxed));
+}
+
+void shutdown_keyboard_effect() {
   std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
   stop_locked();
 }

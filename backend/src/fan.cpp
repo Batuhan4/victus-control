@@ -86,6 +86,45 @@ static std::array<std::chrono::steady_clock::time_point, 2> fan_last_apply = {
     std::chrono::steady_clock::time_point::min()
 };
 
+bool fan_control_disabled_by(const char *value)
+{
+    return value != nullptr && std::string(value) == "1";
+}
+
+bool fan_control_disabled()
+{
+    // Read once: systemd sets the variable for the whole life of the service.
+    static const bool disabled = fan_control_disabled_by(std::getenv("VICTUS_NO_FAN_CONTROL"));
+    return disabled;
+}
+
+std::string fan_target_support_in(const std::string &hwmon_dir)
+{
+    if (hwmon_dir.empty()) {
+        return "UNSUPPORTED";
+    }
+
+    // The driver only creates fan*_target when the BIOS reports software fan
+    // support, and Better Auto and MANUAL need both fans to be steerable.
+    struct stat buffer;
+    for (const char *name : {"/fan1_target", "/fan2_target"}) {
+        if (stat((hwmon_dir + name).c_str(), &buffer) != 0) {
+            return "UNSUPPORTED";
+        }
+    }
+    return "SUPPORTED";
+}
+
+static bool fan_targets_supported()
+{
+    return fan_target_support_in(find_hwmon_directory("/sys/devices/platform/hp-wmi/hwmon")) == "SUPPORTED";
+}
+
+static constexpr const char *kFanControlDisabledError =
+    "ERROR: Fan control is disabled (VICTUS_NO_FAN_CONTROL=1)";
+static constexpr const char *kFanTargetsUnsupportedError =
+    "ERROR: Fan speed targets are not supported on this board";
+
 struct ThermalSnapshot {
     std::optional<double> cpu_temp_c;
     std::optional<double> gpu_temp_c;
@@ -1060,6 +1099,16 @@ std::string get_fan_mode()
 
 std::string set_fan_mode(const std::string &mode)
 {
+    if (fan_control_disabled()) {
+        return kFanControlDisabledError;
+    }
+    // MANUAL and Better Auto both steer the fans through fan*_target; without
+    // those files they would switch the driver to manual and then have nothing
+    // to write, so refuse them up front instead of half-applying.
+    if ((mode == "MANUAL" || mode == "BETTER_AUTO") && !fan_targets_supported()) {
+        return kFanTargetsUnsupportedError;
+    }
+
     std::string previous_mode;
     {
         std::lock_guard<std::mutex> lock(mode_mutex);
@@ -1093,14 +1142,25 @@ std::string set_fan_mode(const std::string &mode)
 
 std::string get_fan_target_support()
 {
-    std::string hwmon = find_hwmon_directory("/sys/devices/platform/hp-wmi/hwmon");
-    if (hwmon.empty()) {
-        return "UNSUPPORTED";
+    if (fan_control_disabled()) {
+        return "DISABLED";
     }
+    return fan_target_support_in(find_hwmon_directory("/sys/devices/platform/hp-wmi/hwmon"));
+}
 
-    struct stat buffer;
-    std::string target = hwmon + "/fan1_target";
-    return stat(target.c_str(), &buffer) == 0 ? "SUPPORTED" : "UNSUPPORTED";
+std::string restore_firmware_fan_control()
+{
+    // Retire any MANUAL/MAX watchdog thread and the Better Auto loop first, so
+    // nothing re-asserts a mode behind the firmware's back.
+    fan_thread_generation++;
+    stop_better_auto();
+
+    auto result = write_hw_fan_mode("AUTO");
+    if (result == "OK") {
+        std::lock_guard<std::mutex> lock(mode_mutex);
+        requested_mode = "AUTO";
+    }
+    return result;
 }
 
 std::string ensure_better_auto_mode()
@@ -1222,6 +1282,13 @@ std::string get_gpu_temperature()
 
 std::string set_fan_speed(const std::string &fan_num, const std::string &speed, bool trigger_mode, bool update_cache)
 {
+    if (fan_control_disabled()) {
+        return kFanControlDisabledError;
+    }
+    if (!fan_targets_supported()) {
+        return kFanTargetsUnsupportedError;
+    }
+
     auto fan_index = fan_index_from_string(fan_num);
     if (!fan_index) {
         return "ERROR: Invalid fan number";
