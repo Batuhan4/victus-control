@@ -104,10 +104,12 @@ def parse_rpm(reply):
         return None
 
 
-def notify(summary, body, critical):
-    urgency = "critical" if critical else "normal"
+def notify(summary, body):
+    # Always urgency=normal: most notification daemons (GNOME's Shell included)
+    # ignore -t on critical-urgency notifications and leave them on screen
+    # until dismissed, defeating the timeout below.
     subprocess.Popen(
-        ["notify-send", "-a", APP_NAME, "-u", urgency,
+        ["notify-send", "-a", APP_NAME, "-u", "normal", "-t", "5000",
          "-i", "sensors-temperature-symbolic", summary, body],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
@@ -209,32 +211,32 @@ def main():
         if cpu_85.update(cpu, now):
             notify("CPU running hot",
                    f"CPU above 85 °C for {CPU_SUSTAINED_85_SECS:.0f} s (now {cpu:.0f} °C). "
-                   f"Check active workloads.", critical=False)
+                   f"Check active workloads.")
 
         if cpu_90.update(cpu, now):
             notify("CPU very hot",
                    f"CPU above 90 °C for {CPU_SUSTAINED_90_SECS:.0f} s (now {cpu:.0f} °C). "
-                   f"Close heavy workloads.", critical=False)
+                   f"Close heavy workloads.")
 
         if cpu_95.update(cpu, now):
             notify("CPU critical temperature",
                    f"CPU above 95 °C for {CPU_SUSTAINED_95_SECS:.0f} s (now {cpu:.0f} °C). "
-                   f"Close heavy workloads immediately.", critical=True)
+                   f"Close heavy workloads immediately.")
 
         if cpu_100.update(cpu, now):
             notify("CPU dangerously hot",
                    f"CPU above 100 °C for {CPU_SUSTAINED_100_SECS:.0f} s (now {cpu:.0f} °C). "
-                   f"System may throttle or shut down.", critical=True)
+                   f"System may throttle or shut down.")
 
         if gpu_80.update(gpu, now):
             notify("GPU running hot",
                    f"GPU above 80 °C for {GPU_SUSTAINED_80_SECS:.0f} s (now {gpu:.0f} °C). "
-                   f"Check active workloads.", critical=False)
+                   f"Check active workloads.")
 
         if gpu_85.update(gpu, now):
             notify("GPU critical temperature",
                    f"GPU above 85 °C for {GPU_SUSTAINED_85_SECS:.0f} s (now {gpu:.0f} °C). "
-                   f"Close heavy workloads immediately.", critical=True)
+                   f"Close heavy workloads immediately.")
 
         # Cooling-not-engaged warning: hot, but the fans aren't ramping — either
         # they're idling or the user is in MANUAL mode with low fan speeds.
@@ -249,8 +251,7 @@ def main():
             reason = "fan mode is MANUAL" if mode == "MANUAL" else "the fans are barely spinning"
             notify("Cooling may not keep up",
                    f"{'CPU' if hottest == cpu else 'GPU'} is at {hottest:.0f} °C "
-                   f"but {reason}. Consider Better Auto or a higher fan speed.",
-                   critical=False)
+                   f"but {reason}. Consider Better Auto or a higher fan speed.")
 
         time.sleep(POLL_INTERVAL_S)
 
