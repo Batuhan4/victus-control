@@ -175,7 +175,7 @@ Everything lives on one page, with a card per subsystem.
 Fan speed and temperature are shown as analog dials with the digital value under each. The rotor blades turn at a rate derived from the measured RPM, and a stopped fan renders grey rather than merely still. Thermometers and readouts shift cyan → amber → red, crossing at 70 °C and 85 °C.
 
 > [!NOTE]
-> On boards whose firmware refuses fan speed targets, manual speed is removed from the card entirely and `MANUAL` is dropped from the profile list, rather than being offered as a control that does nothing.
+> On boards whose firmware exposes no fan speed targets, manual speed is removed from the card entirely and both `MANUAL` and `Better Auto` are dropped from the profile list, since both steer the fans through those targets. `AUTO` and `MAX` remain, and the backend leaves such boards on the firmware curve at start-up.
 
 **Keyboard card** — a switch turns the backlight on and off, a row of style radios picks the lighting mode, and the speed slider or colour picker appears depending on which style is selected. There is no Apply step; changing anything applies it.
 
@@ -199,8 +199,8 @@ Backend status: `systemctl status victus-backend.service` (logs via `journalctl 
 </div>
 
 - The **Speed** slider (1–100) sets the cycle rate.
-- Picking a static colour stops the animation, and the chosen effect is restored after a reboot.
-- The animation runs in the backend, so lighting keeps going after the GUI is closed. It pauses while the backlight is switched off.
+- Picking a static colour stops the animation. Whichever you chose last, an effect or a solid colour, is restored after a reboot.
+- The animation runs in the backend, so lighting keeps going after the GUI is closed. It pauses while the backlight is switched off and resumes when it is switched back on.
 
 > [!TIP]
 > Controls that cannot do anything are not shown: **Flow** is absent on single-zone boards, the colour picker only appears for **Solid**, and the speed slider only for the animated styles.
@@ -274,15 +274,16 @@ The last command should point at the DKMS-built `hp-wmi.ko` under `/updates/dkms
 <details>
 <summary><b>Fans stuck at one speed after the service starts</b></summary>
 
-A few boards report software fan support but have a BIOS that ignores per-RPM targets. Better Auto then switches the fans to MANUAL and cannot set a speed, leaving them pinned with the firmware curve disabled.
+A few boards report software fan support but have a BIOS that ignores per-RPM targets. Better Auto then switches the fans to MANUAL and cannot steer them, leaving them pinned with the firmware curve disabled.
 
-Check with:
+Check with the backend in Better Auto and the machine under load:
 
 ```bash
-cat /sys/devices/platform/hp-wmi/hwmon/hwmon*/fan1_target
+grep . /sys/devices/platform/hp-wmi/hwmon/hwmon*/fan*_input
+journalctl -u victus-backend -n 20
 ```
 
-If that returns `Invalid argument` while writes appear to succeed, your board is affected. Keep the keyboard lighting and leave the fans to the firmware:
+If the RPM readings sit at one value while the `better-auto:` lines in the log keep raising the level, your board is affected. Keep the keyboard lighting and leave the fans to the firmware:
 
 ```bash
 sudo mkdir -p /etc/systemd/system/victus-backend.service.d
@@ -291,7 +292,7 @@ printf '[Service]\nEnvironment=VICTUS_NO_FAN_CONTROL=1\n' | \
 sudo systemctl daemon-reload && sudo systemctl restart victus-backend
 ```
 
-The app detects this case and disables the manual speed slider with an explanation rather than letting it fail silently.
+With that set the backend puts the driver back into AUTO on every start, refuses fan commands from any client, and the app's cooling card shows fan speeds and temperatures only.
 
 </details>
 
