@@ -35,6 +35,17 @@ if [[ -z "${HWMON_PATH}" ]]; then
     exit 3
 fi
 
+# MANUAL (and BETTER_AUTO, which drives the fans through MANUAL) needs
+# fanN_target to set a speed once the firmware curve is off. On boards that
+# expose no target (e.g. 8E5F / Victus 15-fb3xxx) that combination strands the
+# fans at whatever RPM they happened to be at, with nothing managing cooling.
+# AUTO and MAX are both driven by pwm1_enable alone, so they stay available.
+if [[ "${value}" == "1" ]] && [[ ! -e "${HWMON_PATH}/fan1_target" ]]; then
+    echo "Refusing mode '${mode}': no fan1_target on this board, so no speed could be set." >&2
+    echo "Keeping the firmware AUTO curve. Use MAX for full fans." >&2
+    value="2"
+fi
+
 CONTROL_FILE="${HWMON_PATH}/pwm1_enable"
 if [[ ! -w "${CONTROL_FILE}" ]]; then
     # Attempt to adjust permissions for diagnostics, but continue even if it fails.
