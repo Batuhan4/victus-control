@@ -24,13 +24,16 @@ public:
 	std::unique_ptr<VictusKeyboardControl> keyboard_control;
 	VictusAbout about;
 
-	VictusControl()
+	explicit VictusControl(GtkApplication *application)
 	{
 		socket_client = std::make_shared<VictusSocketClient>("/run/victus-control/victus_backend.sock");
 		fan_control = std::make_unique<VictusFanControl>(socket_client);
 		keyboard_control = std::make_unique<VictusKeyboardControl>(socket_client);
 
-		window = gtk_window_new();
+		// Tying the window to the application is what makes the process a
+		// single instance: a second launch (the OMEN key, the .desktop entry)
+		// re-activates this one instead of building a second dashboard.
+		window = gtk_application_window_new(application);
 		gtk_window_set_title(GTK_WINDOW(window), "VICTUS CONTROL");
 		gtk_window_set_default_size(GTK_WINDOW(window), 900, 900);
 
@@ -93,20 +96,12 @@ public:
 		gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(header_bar), TRUE);
 	}
 
-	void run()
+	// Shows the dashboard, or raises it if it is already open behind other
+	// windows. GtkApplication owns the main loop and quits when the last
+	// window closes, so there is no loop to run here.
+	void present()
 	{
-		GMainLoop *loop = g_main_loop_new(nullptr, FALSE);
-
-		g_signal_connect(window, "destroy", G_CALLBACK(+[](GtkWidget *, gpointer loop)
-		{
-			g_main_loop_quit(static_cast<GMainLoop *>(loop));
-		}), loop);
-
-		gtk_widget_set_visible(window, true);
-
-		g_main_loop_run(loop);
-
-		g_main_loop_unref(loop);
+		gtk_window_present(GTK_WINDOW(window));
 	}
 
 private:
@@ -118,40 +113,82 @@ private:
 	}
 };
 
-int main(int argc, char *argv[])
-{
-	gtk_init();
-	apply_victus_style();
+// The name the single-instance lock is taken under, so it must stay stable:
+// change it and a running instance stops answering new launches. The .desktop
+// file carries a matching StartupWMClass so the shell still pairs the window
+// with the launcher.
+#define APPLICATION_ID "io.github.batuhan4.victus-control"
 
-	try {
-		VictusControl app;
-		app.run();
-	} catch (const std::exception &e) {
-		std::cerr << "An unhandled exception occurred: " << e.what() << std::endl;
-		GtkWidget *error_dialog = gtk_message_dialog_new(
-			nullptr,
-			GTK_DIALOG_DESTROY_WITH_PARENT,
-			GTK_MESSAGE_ERROR,
-			GTK_BUTTONS_CLOSE,
-			"An error occurred: %s",
-			e.what()
-		);
-		gtk_window_set_title(GTK_WINDOW(error_dialog), "Error");
-		GMainLoop *loop = g_main_loop_new(nullptr, FALSE);
-		g_signal_connect(error_dialog, "response", G_CALLBACK(+[](GtkDialog *dialog, int, gpointer user_data) {
-			g_main_loop_quit(static_cast<GMainLoop *>(user_data));
-			gtk_window_destroy(GTK_WINDOW(dialog));
-		}), loop);
-		g_signal_connect(error_dialog, "close-request", G_CALLBACK(+[](GtkWidget *, gpointer user_data) {
-			g_main_loop_quit(static_cast<GMainLoop *>(user_data));
-			return FALSE;
-		}), loop);
-		gtk_widget_set_visible(error_dialog, true);
-		g_main_loop_run(loop);
-		g_main_loop_unref(loop);
-		return 1;
+namespace {
+
+struct AppState
+{
+	std::unique_ptr<VictusControl> control;
+	bool failed = false;
+};
+
+void show_error_dialog(GtkApplication *application, const char *message)
+{
+	GtkWidget *error_dialog = gtk_message_dialog_new(
+		nullptr,
+		GTK_DIALOG_DESTROY_WITH_PARENT,
+		GTK_MESSAGE_ERROR,
+		GTK_BUTTONS_CLOSE,
+		"An error occurred: %s",
+		message
+	);
+	gtk_window_set_title(GTK_WINDOW(error_dialog), "Error");
+
+	// Hold the application so it does not exit before the dialog is dismissed;
+	// the dialog is not an application window, so it does not keep it alive.
+	g_application_hold(G_APPLICATION(application));
+	g_signal_connect(error_dialog, "response", G_CALLBACK(+[](GtkDialog *dialog, int, gpointer user_data) {
+		gtk_window_destroy(GTK_WINDOW(dialog));
+		g_application_release(G_APPLICATION(user_data));
+	}), application);
+
+	gtk_widget_set_visible(error_dialog, true);
+}
+
+// Runs on the first launch and again on every re-activation, including the one
+// the OMEN key triggers by re-running the binary.
+void on_activate(GtkApplication *application, gpointer user_data)
+{
+	AppState *state = static_cast<AppState *>(user_data);
+
+	if (state->failed)
+		return;
+
+	if (!state->control) {
+		try {
+			apply_victus_style();
+			state->control = std::make_unique<VictusControl>(application);
+		} catch (const std::exception &e) {
+			std::cerr << "An unhandled exception occurred: " << e.what() << std::endl;
+			state->failed = true;
+			show_error_dialog(application, e.what());
+			return;
+		}
 	}
 
+	state->control->present();
+}
 
-	return 0;
+}  // namespace
+
+int main(int argc, char *argv[])
+{
+	AppState state;
+
+	GtkApplication *application = gtk_application_new(APPLICATION_ID, G_APPLICATION_DEFAULT_FLAGS);
+	g_signal_connect(application, "activate", G_CALLBACK(on_activate), &state);
+
+	int status = g_application_run(G_APPLICATION(application), argc, argv);
+
+	// Tear the window down before GTK shuts down, so the socket client and the
+	// control objects are destroyed while their GTK widgets are still valid.
+	state.control.reset();
+	g_object_unref(application);
+
+	return state.failed ? 1 : status;
 }

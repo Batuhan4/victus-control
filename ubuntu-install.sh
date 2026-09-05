@@ -206,6 +206,30 @@ install_temperature_monitor() {
     fi
 }
 
+enable_omen_hotkey() {
+    echo "--> Enabling the OMEN key listener..."
+
+    # The binary, the user unit and the udev rule are installed by meson, so
+    # this only has to switch the service on for the desktop user. It opens the
+    # hotkey input device, which the udev rule hands to the victus group.
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        local uid
+        uid="$(id -u "${SUDO_USER}")"
+        if sudo -u "${SUDO_USER}" \
+               XDG_RUNTIME_DIR="/run/user/${uid}" \
+               systemctl --user enable --now victus-hotkeyd.service 2>/dev/null; then
+            echo "Enabled victus-hotkeyd.service for user '${SUDO_USER}'."
+        else
+            echo "Note: could not enable victus-hotkeyd for '${SUDO_USER}' now" \
+                 "(no active session?). It will start on next login."
+        fi
+    else
+        echo "Note: run the installer with sudo from your desktop user to" \
+             "auto-enable the OMEN key. Otherwise enable it with:" \
+             "systemctl --user enable --now victus-hotkeyd.service"
+    fi
+}
+
 install_hp_wmi_dkms() {
     local wmi_root="wmi-project"
     local wmi_repo="${wmi_root}/hp-wmi-fan-and-backlight-control"
@@ -262,7 +286,8 @@ start_services() {
     systemd-tmpfiles --create || echo "Warning: Failed to create tmpfiles, continuing..."
     systemctl daemon-reload
     udevadm control --reload-rules
-    udevadm trigger --subsystem-match=hwmon --subsystem-match=leds || true
+    # input is included for the OMEN key rule, which sits on the hotkey device.
+    udevadm trigger --subsystem-match=hwmon --subsystem-match=leds --subsystem-match=input || true
     # The four-zone RGB rule sits on the platform device, not on hwmon/leds.
     udevadm trigger --subsystem-match=platform --sysname-match=hp-wmi || true
     udevadm settle || true
@@ -281,6 +306,7 @@ install_helpers_and_sudoers
 install_temperature_monitor
 install_hp_wmi_dkms
 build_and_install_app
+enable_omen_hotkey
 start_services
 
 echo
