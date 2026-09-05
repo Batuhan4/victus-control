@@ -6,3 +6,4 @@ Icon=victus-icon
 Terminal=false
 Type=Application
 Categories=Utility;
+StartupWMClass=io.github.batuhan4.victus-control

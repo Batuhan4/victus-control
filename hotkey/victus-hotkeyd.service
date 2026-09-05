@@ -1,0 +1,15 @@
+[Unit]
+Description=Victus Control OMEN key listener
+Documentation=https://github.com/Batuhan4/victus-control
+# Launches the GUI, so it is only meaningful inside a graphical session.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/victus-hotkeyd
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
