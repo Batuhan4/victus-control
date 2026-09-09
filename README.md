@@ -46,6 +46,7 @@ privileged backend, a GTK4 desktop app, and a GNOME Shell extension.
 - [Install & update](#install--update)
 - [Daily usage](#daily-usage)
 - [Lighting effects](#lighting-effects)
+- [Cinnamon applet](#cinnamon-applet)
 - [GNOME Shell extension](#gnome-shell-extension)
 - [Developing](#developing)
 - [Troubleshooting](#troubleshooting)
@@ -62,7 +63,7 @@ privileged backend, a GTK4 desktop app, and a GNOME Shell extension.
 | 🎚️ | **Manual mode** | Eight RPM steps (~2000 ➜ 5800/6100 RPM) with per-fan precision and watchdog refreshes that keep settings alive through firmware quirks. |
 | 🌈 | **Animated lighting** | Single-zone and four-zone RGB, brightness, and rainbow / breathe / flow animations that keep running after the app is closed. |
 | 📊 | **Analog telemetry** | Fan dials whose blades turn with the real RPM, and thermometers that shift colour as they heat. |
-| 🖥️ | **GNOME integration** | Fan and keyboard controls from the top panel. |
+| 🖥️ | **Panel integration** | Fan and keyboard controls from the panel — a Cinnamon applet and a GNOME Shell extension. |
 
 > [!WARNING]
 > Validated primarily on **HP Victus 16-s00xxxx** and contributor-tested on the Fedora/Arch variants listed in PRs and issues. Other models may work but are not guaranteed — **monitor your thermals**. On **HP Victus 15 fa0xxx**, manual fan speeds appear unsupported; only `MAX`, `AUTO`, and Better Auto are known to behave.
@@ -206,6 +207,44 @@ Backend status: `systemctl status victus-backend.service` (logs via `journalctl 
 > Controls that cannot do anything are not shown: **Flow** is absent on single-zone boards, the colour picker only appears for **Solid**, and the speed slider only for the animated styles.
 
 ---
+
+## Cinnamon applet
+
+For Cinnamon desktops (Linux Mint, and Cinnamon on Ubuntu/Fedora/Arch). Fan mode,
+keyboard backlight and lighting effects from the panel, next to the battery and
+volume icons — the same idea as the brightness slider in the battery menu, so the
+desktop app is not needed for everyday adjustments.
+
+<div align="center">
+<img src="docs/images/cinnamon-applet.png" width="420" alt="Victus Control Cinnamon applet menu">
+</div>
+
+| | In the menu |
+| :-: | --- |
+| 🌀 | **Fan mode** — Auto, Better Auto, Max (and Manual where the firmware supports it) |
+| 📊 | **Live telemetry** — both fan RPMs and CPU/GPU temperature |
+| ⌨️ | **Keyboard backlight** — on/off switch and a brightness slider |
+| 🌈 | **Lighting effect** — Static, Rainbow, Breathe (and Flow on four-zone boards) with a speed slider |
+
+The panel itself shows CPU temperature by default; right-click → *Configure* to
+show fan RPM instead, or just the icon.
+
+```bash
+bash cinnamon-applet/install.sh
+```
+
+`install.sh` runs this automatically when Cinnamon is detected. If the applet does
+not appear, restart Cinnamon with <kbd>Alt</kbd>+<kbd>F2</kbd>, then `r`, Enter.
+
+> [!NOTE]
+> Controls that the hardware cannot honour are hidden rather than shown inert:
+> **Manual** fan mode is absent where the firmware refuses fan speed targets, and
+> **Flow** is absent on single-zone keyboards.
+
+> [!TIP]
+> The applet polls slowly (10 s) while its menu is closed and only speeds up to
+> 2 s while you have it open, so it costs very little when you are not using it.
+> The interval is configurable in its settings.
 
 ## GNOME Shell extension
 

@@ -52,6 +52,40 @@ install_gnome_extension_if_available() {
     fi
 }
 
+install_cinnamon_applet_if_available() {
+    local target_user=""
+    local target_home=""
+
+    if ! command -v cinnamon >/dev/null 2>&1; then
+        echo "--> Cinnamon not detected; skipping Cinnamon applet installation."
+        return 0
+    fi
+
+    if [[ ! -f "${script_dir}/cinnamon-applet/install.sh" ]]; then
+        echo "--> Cinnamon applet installer not found; skipping."
+        return 0
+    fi
+
+    if ! target_user="$(detect_desktop_user)"; then
+        echo "Warning: Cinnamon was detected, but no desktop user could be determined." >&2
+        echo "Run '${script_dir}/cinnamon-applet/install.sh' as your normal user later if you want the panel applet." >&2
+        return 0
+    fi
+
+    target_home="$(getent passwd "${target_user}" | cut -d: -f6)"
+    if [[ -z "${target_home}" || ! -d "${target_home}" ]]; then
+        echo "Warning: Could not resolve a home directory for '${target_user}'. Skipping Cinnamon applet installation." >&2
+        return 0
+    fi
+
+    echo "--> Cinnamon detected; installing panel applet for ${target_user}..."
+    if sudo -u "${target_user}" HOME="${target_home}" bash "${script_dir}/cinnamon-applet/install.sh"; then
+        echo "--> Cinnamon applet installed for ${target_user}."
+    else
+        echo "Warning: Cinnamon applet installation failed for '${target_user}'. You can retry manually later." >&2
+    fi
+}
+
 detect_target() {
     local os_id=""
     local os_like=""
@@ -115,3 +149,4 @@ case "${target}" in
 esac
 
 install_gnome_extension_if_available
+install_cinnamon_applet_if_available

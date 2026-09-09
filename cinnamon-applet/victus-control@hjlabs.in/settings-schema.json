@@ -1,0 +1,22 @@
+{
+    "panel-display": {
+        "type": "combobox",
+        "default": "cpu-temp",
+        "description": "Show in the panel",
+        "options": {
+            "CPU temperature": "cpu-temp",
+            "Fan 1 RPM": "fan-rpm",
+            "Icon only": "icon-only"
+        }
+    },
+    "idle-poll-seconds": {
+        "type": "spinbutton",
+        "default": 10,
+        "min": 3,
+        "max": 60,
+        "step": 1,
+        "units": "seconds",
+        "description": "Refresh interval while the menu is closed",
+        "tooltip": "The panel only needs a slow refresh. Lower values cost more CPU."
+    }
+}
