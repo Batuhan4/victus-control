@@ -216,7 +216,18 @@ volume icons — the same idea as the brightness slider in the battery menu, so 
 desktop app is not needed for everyday adjustments.
 
 <div align="center">
-<img src="docs/images/cinnamon-applet.png" width="420" alt="Victus Control Cinnamon applet menu">
+
+<img src="docs/images/cinnamon-applet-panel.png" width="620" alt="The applet in the Cinnamon panel">
+
+*In the panel next to the battery and volume icons — showing CPU temperature at a glance.*
+
+<br>
+
+| Menu | Fan mode |
+| :--: | :------: |
+| <img src="docs/images/cinnamon-applet.png" width="300" alt="Applet menu"> | <img src="docs/images/cinnamon-applet-fanmode.png" width="300" alt="Fan mode submenu"> |
+| Live RPM and temperatures, backlight switch and sliders | Mode submenu with the active mode marked |
+
 </div>
 
 | | In the menu |
