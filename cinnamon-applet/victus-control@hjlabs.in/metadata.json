@@ -1,0 +1,10 @@
+{
+    "uuid": "victus-control@hjlabs.in",
+    "name": "Victus Control",
+    "description": "Fan mode, fan speed and keyboard lighting for HP Victus / Omen laptops, from the panel.",
+    "icon": "weather-windy-symbolic",
+    "author": "hemangjoshi37a",
+    "version": "1.0.0",
+    "cinnamon-version": ["5.0", "5.2", "5.4", "5.6", "5.8", "6.0", "6.2", "6.4", "6.6"],
+    "max-instances": 1
+}
