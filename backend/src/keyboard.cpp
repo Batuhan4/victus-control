@@ -54,6 +54,11 @@ bool omen_4zone_exists() {
   return stat(kFourZoneZone0Path, &buffer) == 0;
 }
 
+bool single_zone_exists() {
+  struct stat buffer;
+  return stat(kSingleZoneColorPath, &buffer) == 0;
+}
+
 std::string trim_trailing_whitespace(std::string value) {
   size_t last = value.find_last_not_of(" \n\r\t");
   if (last == std::string::npos)
@@ -191,7 +196,14 @@ std::string fourzone_brightness_value() {
 } // namespace
 
 std::string get_keyboard_type() {
-  return omen_4zone_exists() ? "FOUR_ZONE" : "SINGLE_ZONE";
+  if (omen_4zone_exists())
+    return "FOUR_ZONE";
+
+  return single_zone_exists() ? "SINGLE_ZONE" : "NONE";
+}
+
+bool keyboard_rgb_supported() {
+  return omen_4zone_exists() || single_zone_exists();
 }
 
 std::string get_keyboard_color() {

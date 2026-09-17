@@ -14,6 +14,10 @@ public:
 
   GtkWidget *get_page();
 
+  // False on boards the backend reports as NONE, which have no addressable
+  // backlight at all and therefore nothing for this card to control.
+  bool backlight_supported() const;
+
 private:
   // Material-style on/off for the backlight, top right of the card.
   GtkWidget *power_switch;
@@ -24,7 +28,7 @@ private:
   GtkLabel *current_state_label;
 
   // New members for keyboard type detection and visualization
-  std::string keyboard_type;  // "SINGLE_ZONE" or "FOUR_ZONE"
+  std::string keyboard_type;  // "SINGLE_ZONE", "FOUR_ZONE" or "NONE"
   GtkWidget *keyboard_visual; // DrawingArea for visual representation
   GdkRGBA zone_colors[4];     // Current colors for each zone
 
