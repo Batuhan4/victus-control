@@ -6,6 +6,12 @@
 #include <vector>
 
 std::string get_keyboard_type();
+
+// False on boards with no addressable backlight at all, where hp-wmi logs
+// "Normal keyboard detected, RGB keyboard support not available" and creates
+// neither the four-zone nor the single-zone sysfs entries.
+bool keyboard_rgb_supported();
+
 std::string get_keyboard_color();
 std::string get_keyboard_zone_color(int zone);
 std::string set_keyboard_color(const std::string &color);
