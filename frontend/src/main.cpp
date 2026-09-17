@@ -67,6 +67,11 @@ public:
 
 		gtk_box_append(GTK_BOX(dashboard), keyboard_page);
 		gtk_box_append(GTK_BOX(dashboard), fan_page);
+
+		// Nothing to light up on boards without a backlight, so the card would
+		// only offer controls that cannot do anything.
+		if (!keyboard_control->backlight_supported())
+			gtk_widget_set_visible(keyboard_page, FALSE);
 	}
 
 	void add_menu()
