@@ -129,6 +129,10 @@ void VictusKeyboardControl::detect_keyboard_type() {
   std::cout << "Detected keyboard type: " << keyboard_type << std::endl;
 }
 
+bool VictusKeyboardControl::backlight_supported() const {
+  return keyboard_type != "NONE";
+}
+
 void VictusKeyboardControl::apply_zone_color_immediately(int zone) {
   if (zone < 0 || zone > 3)
     return;
