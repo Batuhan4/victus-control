@@ -272,6 +272,11 @@ std::string set_keyboard_effect(const std::string &name,
   if (!effect_from_name(normalize_mode(name), &effect))
     return "ERROR: Unknown keyboard effect";
 
+  // Without a backlight there is nothing to animate, and starting the worker
+  // would only spin until it gave up on the write failures.
+  if (!keyboard_rgb_supported())
+    return "ERROR: Keyboard backlight not supported";
+
   // Omitting the speed keeps the rate already in use rather than snapping the
   // animation back to the default.
   int speed_value = g_speed.load(std::memory_order_relaxed);
