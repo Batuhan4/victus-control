@@ -11,6 +11,8 @@ std::string get_fan_max_speed(const std::string &fan_num);
 std::string set_fan_speed(const std::string &fan_num, const std::string &speed, bool trigger_mode = true, bool update_cache = true);
 std::string get_cpu_temperature();
 std::string get_gpu_temperature();
+std::string get_gpu_usage();
+std::string get_gpu_vram();
 // "DISABLED" while VICTUS_NO_FAN_CONTROL=1 is set for the service,
 // "SUPPORTED" when the driver exposes fan1_target and fan2_target for this
 // board, otherwise "UNSUPPORTED". Boards whose BIOS refuses software fan

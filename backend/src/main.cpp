@@ -208,6 +208,18 @@ void handle_command(const std::string &command_str, int client_socket) {
     } else {
       response = "ERROR: Invalid GET_GPU_TEMP command format";
     }
+  } else if (command == "GET_GPU_USAGE") {
+    if (!has_extra_tokens(ss)) {
+      response = get_gpu_usage();
+    } else {
+      response = "ERROR: Invalid GET_GPU_USAGE command format";
+    }
+  } else if (command == "GET_GPU_VRAM") {
+    if (!has_extra_tokens(ss)) {
+      response = get_gpu_vram();
+    } else {
+      response = "ERROR: Invalid GET_GPU_VRAM command format";
+    }
   } else if (command == "GET_KEYBOARD_COLOR") {
     if (!has_extra_tokens(ss)) {
       response = get_keyboard_color();

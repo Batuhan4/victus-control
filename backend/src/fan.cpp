@@ -494,9 +494,13 @@ static bool nvidia_gpu_is_powered()
     return status == "active";
 }
 
-// Query the NVIDIA GPU temperature (°C) and utilisation (%) in one nvidia-smi
-// call. Returns nullopt for each field it can't read. Only call when powered.
-static void read_nvidia_gpu(std::optional<double> &temp_out, std::optional<double> &usage_out)
+// Query the NVIDIA GPU temperature (°C), utilisation (%) and VRAM (MiB) in one
+// nvidia-smi call. Returns nullopt for each field it can't read. Only call when
+// powered. Kept to a single invocation: nvidia-smi is expensive, and a second
+// one for memory would double that cost on every refresh.
+static void read_nvidia_gpu(std::optional<double> &temp_out, std::optional<double> &usage_out,
+                            std::optional<double> *vram_used_out = nullptr,
+                            std::optional<double> *vram_total_out = nullptr)
 {
     probe_nvidia_gpu();
     if (!nvidia_smi_available || !nvidia_gpu_is_powered()) {
@@ -506,7 +510,8 @@ static void read_nvidia_gpu(std::optional<double> &temp_out, std::optional<doubl
     // timeout guards the 2s control loop: a hung nvidia-smi (driver hiccup)
     // must not stall the MANUAL reassert / fan reapply and freeze the fans.
     FILE *pipe = popen(
-        "timeout 3 nvidia-smi --query-gpu=temperature.gpu,utilization.gpu "
+        "timeout 3 nvidia-smi "
+        "--query-gpu=temperature.gpu,utilization.gpu,memory.used,memory.total "
         "--format=csv,noheader,nounits 2>/dev/null", "r");
     if (!pipe) {
         return;
@@ -519,16 +524,24 @@ static void read_nvidia_gpu(std::optional<double> &temp_out, std::optional<doubl
         return;
     }
 
-    // Expected: "73, 44"
-    double temp = 0.0;
-    double usage = 0.0;
-    char comma = '\0';
-    std::istringstream iss(line);
-    if (iss >> temp >> comma && comma == ',') {
+    // Expected: "73, 44, 46, 8151". Commas become spaces so one extractor
+    // handles every field regardless of how many are present.
+    std::string row(line);
+    std::replace(row.begin(), row.end(), ',', ' ');
+    std::istringstream iss(row);
+
+    double temp = 0.0, usage = 0.0, vram_used = 0.0, vram_total = 0.0;
+    if (iss >> temp) {
         temp_out = temp;
     }
     if (iss >> usage) {
         usage_out = usage;
+    }
+    if (vram_used_out != nullptr && (iss >> vram_used)) {
+        *vram_used_out = vram_used;
+    }
+    if (vram_total_out != nullptr && (iss >> vram_total)) {
+        *vram_total_out = vram_total;
     }
 }
 
@@ -1250,6 +1263,40 @@ std::string get_cpu_temperature()
 	}
 
 	return std::to_string(static_cast<int>(std::lround(*cpu_temp)));
+}
+
+std::string get_gpu_usage()
+{
+	probe_nvidia_gpu();
+	if (nvidia_runtime_status_path.empty()) {
+		return "ERROR: No NVIDIA GPU";
+	}
+
+	std::optional<double> temp, usage;
+	read_nvidia_gpu(temp, usage);
+	if (!usage) {
+		// Runtime-suspended: idle rather than an error, matching GET_GPU_TEMP.
+		return "IDLE";
+	}
+	return std::to_string(static_cast<int>(std::lround(*usage)));
+}
+
+std::string get_gpu_vram()
+{
+	probe_nvidia_gpu();
+	if (nvidia_runtime_status_path.empty()) {
+		return "ERROR: No NVIDIA GPU";
+	}
+
+	std::optional<double> temp, usage, used, total;
+	read_nvidia_gpu(temp, usage, &used, &total);
+	if (!used || !total || *total <= 0.0) {
+		return "IDLE";
+	}
+
+	// "used total" in MiB; the caller decides how to present it.
+	return std::to_string(static_cast<int>(std::lround(*used))) + " " +
+	       std::to_string(static_cast<int>(std::lround(*total)));
 }
 
 std::string get_gpu_temperature()

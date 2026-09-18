@@ -18,5 +18,11 @@
         "units": "seconds",
         "description": "Refresh interval while the menu is closed",
         "tooltip": "The panel only needs a slow refresh. Lower values cost more CPU."
+    },
+    "show-graphs": {
+        "type": "checkbox",
+        "default": true,
+        "description": "Show history graphs in the menu",
+        "tooltip": "Draws recent CPU temperature and fan speed under the readings."
     }
 }

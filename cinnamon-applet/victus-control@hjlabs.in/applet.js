@@ -16,6 +16,7 @@ const PopupMenu = imports.ui.popupMenu;
 const Settings = imports.ui.settings;
 const Main = imports.ui.main;
 const Util = imports.misc.util;
+const Cairo = imports.cairo;
 
 const UUID = 'victus-control@hjlabs.in';
 const SOCKET_PATH = '/run/victus-control/victus_backend.sock';
@@ -41,6 +42,16 @@ const EFFECT_LABELS = {
 // Menu-open refresh rate. Closed-menu rate comes from settings, because the
 // panel only needs an occasional number and polling is not free.
 const ACTIVE_POLL_SECONDS = 2;
+
+// How many readings the menu sparklines keep. At the idle rate this is a few
+// minutes of context, which is all a panel graph is for.
+const HISTORY_POINTS = 40;
+
+// Categorical slots validated for CVD separation against a dark surface, the
+// same pair the desktop app uses so the two read as one product. Deliberately
+// not the amber/red used for temperature state.
+const SERIES_A = [0x39 / 255, 0x87 / 255, 0xe5 / 255];   // blue
+const SERIES_B = [0xd5 / 255, 0x51 / 255, 0x81 / 255];   // magenta
 
 function encodeUint32LE(value) {
     return new Uint8Array([
@@ -119,6 +130,105 @@ class LabelledSlider extends PopupMenu.PopupSliderMenuItem {
     }
 }
 
+/* A compact history plot for one measure. Temperature and RPM never share a
+ * plot: two unrelated scales on one grid would imply a relationship that is not
+ * there, so each measure gets its own. */
+class Sparkline extends PopupMenu.PopupBaseMenuItem {
+    constructor(label, colour, unit) {
+        super({ reactive: false });
+
+        this._values = [];
+        this._colour = colour;
+        this._unit = unit;
+        this._label = label;
+
+        this.area = new St.DrawingArea({ style_class: 'victus-sparkline' });
+        this.area.set_width(230);
+        this.area.set_height(42);
+        this.area.connect('repaint', Lang.bind(this, this._repaint));
+        this.addActor(this.area, { span: -1, expand: true });
+    }
+
+    push(value) {
+        if (typeof value !== 'number' || isNaN(value))
+            return;
+        this._values.push(value);
+        while (this._values.length > HISTORY_POINTS)
+            this._values.shift();
+        this.area.queue_repaint();
+    }
+
+    _repaint(area) {
+        let cr = area.get_context();
+        let [width, height] = area.get_surface_size();
+
+        let padLeft = 4, padRight = 42, padTop = 10, padBottom = 3;
+        let plotW = width - padLeft - padRight;
+        let plotH = height - padTop - padBottom;
+
+        // Caption sits above the trace rather than beside it, so the plot keeps
+        // its width in a narrow menu.
+        cr.selectFontFace('sans', Cairo.FontSlant.NORMAL, Cairo.FontWeight.NORMAL);
+        cr.setFontSize(8);
+        cr.setSourceRGBA(0.49, 0.55, 0.64, 0.9);
+        cr.moveTo(padLeft, 8);
+        cr.showText(this._label);
+
+        if (this._values.length < 2) {
+            cr.$dispose();
+            return;
+        }
+
+        // Fit the range to the data: a fan sitting near its ceiling draws as a
+        // flat line on a zero-based axis, hiding the variation worth seeing.
+        let lo = Math.min.apply(null, this._values);
+        let hi = Math.max.apply(null, this._values);
+        let span = hi - lo;
+        let minSpan = this._unit === '%' ? 10 : (this._unit === '' ? 400 : 10);
+        if (span < minSpan) {
+            let extra = (minSpan - span) / 2;
+            lo -= extra;
+            hi += extra;
+        } else {
+            lo -= span * 0.15;
+            hi += span * 0.15;
+        }
+        if (hi <= lo)
+            hi = lo + 1;
+
+        let stepX = plotW / (HISTORY_POINTS - 1);
+        let offset = HISTORY_POINTS - this._values.length;
+
+        cr.setLineWidth(2);
+        cr.setLineJoin(Cairo.LineJoin.ROUND);
+        cr.setSourceRGBA(this._colour[0], this._colour[1], this._colour[2], 1);
+        for (let i = 0; i < this._values.length; i++) {
+            let x = padLeft + (offset + i) * stepX;
+            let y = padTop + plotH - ((this._values[i] - lo) / (hi - lo)) * plotH;
+            if (i === 0)
+                cr.moveTo(x, y);
+            else
+                cr.lineTo(x, y);
+        }
+        cr.stroke();
+
+        // Latest value as a direct label, so the number is readable without a
+        // tooltip the panel cannot offer.
+        let last = this._values[this._values.length - 1];
+        let lastX = padLeft + (HISTORY_POINTS - 1) * stepX;
+        let lastY = padTop + plotH - ((last - lo) / (hi - lo)) * plotH;
+
+        cr.arc(lastX, lastY, 2.5, 0, 2 * Math.PI);
+        cr.fill();
+
+        cr.setFontSize(10);
+        cr.moveTo(lastX + 5, Math.min(Math.max(lastY + 3, padTop + 8), height - 2));
+        cr.showText(String(Math.round(last)) + this._unit);
+
+        cr.$dispose();
+    }
+}
+
 class VictusApplet extends Applet.TextIconApplet {
     _init(metadata, orientation, panelHeight, instanceId) {
         super._init(orientation, panelHeight, instanceId);
@@ -147,6 +257,7 @@ class VictusApplet extends Applet.TextIconApplet {
         this.settings = new Settings.AppletSettings(this, UUID, instanceId);
         this.settings.bind('panel-display', 'panelDisplay', () => this._refresh());
         this.settings.bind('idle-poll-seconds', 'idlePollSeconds', () => this._reschedule());
+        this.settings.bind('show-graphs', 'showGraphs', () => this._applyGraphVisibility());
 
         this.menuManager = new PopupMenu.PopupMenuManager(this);
         this.menu = new Applet.AppletPopupMenu(this, orientation);
@@ -163,6 +274,7 @@ class VictusApplet extends Applet.TextIconApplet {
 
         // Ask the backend what this board can actually do before showing
         // controls for it, then start the slow panel refresh.
+        this._applyGraphVisibility();
         this._probeCapabilities();
         this._reschedule();
     }
@@ -175,6 +287,20 @@ class VictusApplet extends Applet.TextIconApplet {
 
         this._tempItem = new PopupMenu.PopupMenuItem('', { reactive: false });
         this.menu.addMenuItem(this._tempItem);
+
+        // History sparklines, one per measure.
+        this._tempGraph = new Sparkline('CPU TEMPERATURE', SERIES_A, '\u00b0C');
+        this._fanGraph = new Sparkline('FAN 1 SPEED', SERIES_B, '');
+        this.menu.addMenuItem(this._tempGraph);
+        this.menu.addMenuItem(this._fanGraph);
+
+        this._graphSwitch = new PopupMenu.PopupSwitchMenuItem('History graphs', true);
+        this._graphSwitch.connect('toggled', Lang.bind(this, function (item, state) {
+            this.showGraphs = state;
+            this.settings.setValue('show-graphs', state);
+            this._applyGraphVisibility();
+        }));
+        this.menu.addMenuItem(this._graphSwitch);
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
@@ -242,6 +368,16 @@ class VictusApplet extends Applet.TextIconApplet {
             Util.spawnCommandLine('victus-control');
         });
         this.menu.addMenuItem(openItem);
+    }
+
+    _applyGraphVisibility() {
+        let show = this.showGraphs !== false;
+        if (this._tempGraph)
+            this._tempGraph.actor.visible = show;
+        if (this._fanGraph)
+            this._fanGraph.actor.visible = show;
+        if (this._graphSwitch)
+            this._graphSwitch.setToggleState(show);
     }
 
     on_applet_clicked() {
@@ -543,6 +679,14 @@ class VictusApplet extends Applet.TextIconApplet {
                 brightness = parseInt(await this._send('GET_KBD_BRIGHTNESS'), 10);
                 effect = (await this._send('GET_KBD_EFFECT')).trim();
             }
+
+            // Feed the sparklines from the readings this refresh already
+            // fetched: CPU temperature and fan 1 are polled even while the menu
+            // is shut, so their traces stay gapless.
+            if (!isNaN(cpu))
+                this._tempGraph.push(cpu);
+            if (!isNaN(fan1))
+                this._fanGraph.push(fan1);
 
             // Panel
             if (this.panelDisplay === 'cpu-temp' && !isNaN(cpu))
