@@ -45,6 +45,7 @@ privileged backend, a GTK4 desktop app, and a GNOME Shell extension.
 - [System requirements](#system-requirements)
 - [Install & update](#install--update)
 - [Daily usage](#daily-usage)
+- [Telemetry history](#telemetry-history)
 - [Lighting effects](#lighting-effects)
 - [Cinnamon applet](#cinnamon-applet)
 - [GNOME Shell extension](#gnome-shell-extension)
@@ -63,6 +64,7 @@ privileged backend, a GTK4 desktop app, and a GNOME Shell extension.
 | 🎚️ | **Manual mode** | Eight RPM steps (~2000 ➜ 5800/6100 RPM) with per-fan precision and watchdog refreshes that keep settings alive through firmware quirks. |
 | 🌈 | **Animated lighting** | Single-zone and four-zone RGB, brightness, and rainbow / breathe / flow animations that keep running after the app is closed. |
 | 📊 | **Analog telemetry** | Fan dials whose blades turn with the real RPM, and thermometers that shift colour as they heat. |
+| 📈 | **History graphs** | Recent temperature, fan speed, CPU/GPU load, RAM and VRAM on a shared time axis. |
 | 🖥️ | **Panel integration** | Fan and keyboard controls from the panel — a Cinnamon applet and a GNOME Shell extension. |
 
 > [!WARNING]
@@ -184,6 +186,36 @@ Backend status: `systemctl status victus-backend.service` (logs via `journalctl 
 
 ---
 
+## Telemetry history
+
+Switch **History** on in the Cooling card to plot recent telemetry. Off by
+default; the choice is remembered.
+
+<div align="center">
+<img src="docs/images/telemetry-history.png" width="700" alt="Telemetry history chart">
+</div>
+
+Every trace shares one time axis along the bottom, and each has its own scale
+drawn as a parallel axis down the left in that trace's colour. Click a legend
+entry to add or remove a trace and its axis.
+
+| Trace | Source |
+| --- | --- |
+| CPU / GPU temperature | the backend's sensors |
+| Fan 1 / Fan 2 speed | the backend's sensors |
+| CPU load, RAM | `/proc`, read directly |
+| GPU load, VRAM | `GET_GPU_USAGE` / `GET_GPU_VRAM`, reusing the nvidia-smi call the fan loop already makes |
+
+> [!NOTE]
+> Ranges fit the data rather than starting at zero, because a fan at 5300 of
+> 6000 RPM is a flat line on a zero-based axis. Both ends of every axis are
+> labelled, so a non-zero baseline is visible rather than implied.
+
+> [!TIP]
+> Lines are overlaid but scaled independently, so **where two lines cross means
+> nothing** — it is an artefact of the scaling. Compare each line against its
+> own colour-matched axis, not against the others.
+
 ## Lighting effects
 
 | Effect | Behaviour |
@@ -223,10 +255,10 @@ desktop app is not needed for everyday adjustments.
 
 <br>
 
-| Menu | Fan mode |
-| :--: | :------: |
-| <img src="docs/images/cinnamon-applet.png" width="300" alt="Applet menu"> | <img src="docs/images/cinnamon-applet-fanmode.png" width="300" alt="Fan mode submenu"> |
-| Live RPM and temperatures, backlight switch and sliders | Mode submenu with the active mode marked |
+| Menu | Fan mode | History |
+| :--: | :------: | :-----: |
+| <img src="docs/images/cinnamon-applet.png" width="250" alt="Applet menu"> | <img src="docs/images/cinnamon-applet-fanmode.png" width="250" alt="Fan mode submenu"> | <img src="docs/images/cinnamon-applet-graphs.png" width="250" alt="Applet sparklines"> |
+| Live RPM and temperatures, backlight switch and sliders | Mode submenu with the active mode marked | Sparklines, each on its own scale |
 
 </div>
 
