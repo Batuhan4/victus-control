@@ -24,7 +24,9 @@ enum ServerCommands
   SET_KBD_EFFECT,
   GET_KEYBOARD_TYPE,
   GET_CPU_TEMP,
-  GET_GPU_TEMP
+  GET_GPU_TEMP,
+  GET_GPU_USAGE,
+  GET_GPU_VRAM
 };
 
 class VictusSocketClient
