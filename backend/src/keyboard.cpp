@@ -59,6 +59,13 @@ bool single_zone_exists() {
   return stat(kSingleZoneColorPath, &buffer) == 0;
 }
 
+// Any keyboard LED at all, coloured or not. Only its absence means there is
+// nothing for a client to show; a brightness-only backlight still gets a card.
+bool keyboard_led_exists() {
+  struct stat buffer;
+  return stat(kSingleZoneBrightnessPath, &buffer) == 0;
+}
+
 std::string trim_trailing_whitespace(std::string value) {
   size_t last = value.find_last_not_of(" \n\r\t");
   if (last == std::string::npos)
@@ -199,7 +206,7 @@ std::string get_keyboard_type() {
   if (omen_4zone_exists())
     return "FOUR_ZONE";
 
-  return single_zone_exists() ? "SINGLE_ZONE" : "NONE";
+  return (single_zone_exists() || keyboard_led_exists()) ? "SINGLE_ZONE" : "NONE";
 }
 
 bool keyboard_rgb_supported() {

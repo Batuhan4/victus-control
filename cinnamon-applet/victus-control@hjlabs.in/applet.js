@@ -544,6 +544,15 @@ class VictusApplet extends Applet.TextIconApplet {
             if (this._keyboardZones !== 'FOUR_ZONE')
                 this._effectItems['FLOW'].actor.hide();
 
+            // NONE: the board has no keyboard backlight, so there is nothing
+            // for the lighting controls to drive.
+            let hasBacklight = this._keyboardZones !== 'NONE';
+            this._kbdSwitch.actor.visible = hasBacklight;
+            this._kbdSlider.actor.visible = hasBacklight;
+            this._effectMenu.actor.visible = hasBacklight;
+            if (!hasBacklight)
+                this._effectSpeedSlider.actor.hide();
+
             this._refresh();
         })().catch(Lang.bind(this, function (e) {
             global.logError(UUID + ': capability probe failed: ' + e);
@@ -651,7 +660,7 @@ class VictusApplet extends Applet.TextIconApplet {
 
         this._effectMenu.label.text = 'Lighting: ' + (EFFECT_LABELS[this._effect] || this._effect);
 
-        if (this._effect === 'STATIC')
+        if (this._effect === 'STATIC' || this._keyboardZones === 'NONE')
             this._effectSpeedSlider.actor.hide();
         else
             this._effectSpeedSlider.actor.show();
