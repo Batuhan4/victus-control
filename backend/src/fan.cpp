@@ -494,10 +494,72 @@ static bool nvidia_gpu_is_powered()
     return status == "active";
 }
 
-// Query the NVIDIA GPU temperature (°C), utilisation (%) and VRAM (MiB) in one
-// nvidia-smi call. Returns nullopt for each field it can't read. Only call when
-// powered. Kept to a single invocation: nvidia-smi is expensive, and a second
-// one for memory would double that cost on every refresh.
+struct NvidiaReading {
+    std::optional<double> temp;
+    std::optional<double> usage;
+    std::optional<double> vram_used;
+    std::optional<double> vram_total;
+};
+
+// The Better Auto loop and every connected client (GET_GPU_TEMP, GET_GPU_USAGE,
+// GET_GPU_VRAM) want the same nvidia-smi row, and the dashboard asks for all
+// three at once every refresh. A reading younger than this is handed out again
+// instead of spawning another nvidia-smi; it is shorter than the 2s refresh, so
+// every poll still sees a fresh sample.
+static constexpr auto kNvidiaReadingMaxAge = std::chrono::milliseconds(1500);
+static std::mutex nvidia_reading_mutex;
+static NvidiaReading nvidia_last_reading;
+static std::chrono::steady_clock::time_point nvidia_last_reading_at;
+static bool nvidia_have_reading = false;
+
+// One nvidia-smi call for temperature (°C), utilisation (%) and VRAM (MiB).
+// Fields it can't read stay nullopt.
+static NvidiaReading query_nvidia_smi()
+{
+    NvidiaReading reading;
+
+    // timeout guards the 2s control loop: a hung nvidia-smi (driver hiccup)
+    // must not stall the MANUAL reassert / fan reapply and freeze the fans.
+    FILE *pipe = popen(
+        "timeout 3 nvidia-smi "
+        "--query-gpu=temperature.gpu,utilization.gpu,memory.used,memory.total "
+        "--format=csv,noheader,nounits 2>/dev/null", "r");
+    if (!pipe) {
+        return reading;
+    }
+
+    char line[128] = {0};
+    bool have_line = fgets(line, sizeof(line), pipe) != nullptr;
+    pclose(pipe);
+    if (!have_line) {
+        return reading;
+    }
+
+    // Expected: "73, 44, 46, 8151". Commas become spaces so one extractor
+    // handles every field regardless of how many are present.
+    std::string row(line);
+    std::replace(row.begin(), row.end(), ',', ' ');
+    std::istringstream iss(row);
+
+    double value = 0.0;
+    if (iss >> value) {
+        reading.temp = value;
+    }
+    if (iss >> value) {
+        reading.usage = value;
+    }
+    if (iss >> value) {
+        reading.vram_used = value;
+    }
+    if (iss >> value) {
+        reading.vram_total = value;
+    }
+    return reading;
+}
+
+// Query the NVIDIA GPU temperature, utilisation and VRAM. Returns nullopt for
+// each field it can't read, and nothing at all while the dGPU is suspended:
+// it is never woken just to be polled.
 static void read_nvidia_gpu(std::optional<double> &temp_out, std::optional<double> &usage_out,
                             std::optional<double> *vram_used_out = nullptr,
                             std::optional<double> *vram_total_out = nullptr)
@@ -507,41 +569,31 @@ static void read_nvidia_gpu(std::optional<double> &temp_out, std::optional<doubl
         return;
     }
 
-    // timeout guards the 2s control loop: a hung nvidia-smi (driver hiccup)
-    // must not stall the MANUAL reassert / fan reapply and freeze the fans.
-    FILE *pipe = popen(
-        "timeout 3 nvidia-smi "
-        "--query-gpu=temperature.gpu,utilization.gpu,memory.used,memory.total "
-        "--format=csv,noheader,nounits 2>/dev/null", "r");
-    if (!pipe) {
-        return;
+    NvidiaReading reading;
+    {
+        // Held across the query so concurrent callers wait for the one
+        // nvidia-smi already running rather than each starting their own.
+        std::lock_guard<std::mutex> lock(nvidia_reading_mutex);
+        const auto now = std::chrono::steady_clock::now();
+        if (!nvidia_have_reading || now - nvidia_last_reading_at >= kNvidiaReadingMaxAge) {
+            nvidia_last_reading = query_nvidia_smi();
+            nvidia_last_reading_at = std::chrono::steady_clock::now();
+            nvidia_have_reading = true;
+        }
+        reading = nvidia_last_reading;
     }
 
-    char line[128] = {0};
-    bool have_line = fgets(line, sizeof(line), pipe) != nullptr;
-    pclose(pipe);
-    if (!have_line) {
-        return;
+    if (reading.temp) {
+        temp_out = reading.temp;
     }
-
-    // Expected: "73, 44, 46, 8151". Commas become spaces so one extractor
-    // handles every field regardless of how many are present.
-    std::string row(line);
-    std::replace(row.begin(), row.end(), ',', ' ');
-    std::istringstream iss(row);
-
-    double temp = 0.0, usage = 0.0, vram_used = 0.0, vram_total = 0.0;
-    if (iss >> temp) {
-        temp_out = temp;
+    if (reading.usage) {
+        usage_out = reading.usage;
     }
-    if (iss >> usage) {
-        usage_out = usage;
+    if (vram_used_out != nullptr && reading.vram_used) {
+        *vram_used_out = reading.vram_used;
     }
-    if (vram_used_out != nullptr && (iss >> vram_used)) {
-        *vram_used_out = vram_used;
-    }
-    if (vram_total_out != nullptr && (iss >> vram_total)) {
-        *vram_total_out = vram_total;
+    if (vram_total_out != nullptr && reading.vram_total) {
+        *vram_total_out = reading.vram_total;
     }
 }
 
