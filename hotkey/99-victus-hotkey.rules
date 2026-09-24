@@ -1,0 +1,12 @@
+# /etc/udev/rules.d/99-victus-hotkey.rules
+#
+# victus-hotkeyd runs as a user service, so it needs to read the HP WMI hotkey
+# device to see the OMEN key. Access goes to the victus group, matching how the
+# fan and backlight nodes are handled in 99-hp-wmi-permissions.rules.
+#
+# This device only carries the firmware hotkeys -- brightness, mic mute, OMEN --
+# and never the typing keyboard, which stays root-only. Read access is granted
+# rather than adding anyone to the input group, which would expose every input
+# device including the real keyboard.
+
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="HP WMI hotkeys", GROUP="victus", MODE="0640"

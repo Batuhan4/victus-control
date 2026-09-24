@@ -5,3 +5,4 @@ project('victus-control', 'cpp', 'c',
 
 subdir('backend')
 subdir('frontend')
+subdir('hotkey')

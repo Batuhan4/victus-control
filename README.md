@@ -44,6 +44,7 @@ privileged backend, a GTK4 desktop app, and a GNOME Shell extension.
 - [Secure Boot / userspace alternative](#secure-boot--userspace-alternative)
 - [System requirements](#system-requirements)
 - [Install & update](#install--update)
+- [The OMEN key](#the-omen-key)
 - [Daily usage](#daily-usage)
 - [Lighting effects](#lighting-effects)
 - [GNOME Shell extension](#gnome-shell-extension)
@@ -158,12 +159,53 @@ The installer handles dependency install, user/group creation, DKMS module regis
 | --- | --- |
 | `victus-healthcheck.service` | Runs at boot to ensure the patched `hp-wmi` DKMS module is built for the current kernel and `hp_wmi` is loaded before the backend starts |
 | `victus-backend.service` | Starts at boot and stays active, keeping Better Auto and the lighting applied even with no UI client connected |
+| `victus-hotkeyd.service` | A **user** unit that watches for the dedicated OMEN key and opens the dashboard. See [The OMEN key](#the-omen-key) |
+
+---
+
+## The OMEN key
+
+The dedicated OMEN key above the keyboard opens Victus Control.
+
+The `hp-wmi` driver reports that key on its `HP WMI hotkeys` input device as
+`KEY_PROG2` (scancodes `0x21a5` and `0x21a8` both map to it). `victus-hotkeyd`
+watches for it and runs `victus-control`. The app is a single instance, so
+pressing the key again raises the window that is already open rather than
+stacking up a second dashboard.
+
+It runs as a *user* service, not a system one, because it has to launch a GUI
+into the session that owns the display:
+
+```bash
+systemctl --user status victus-hotkeyd.service
+systemctl --user disable --now victus-hotkeyd.service   # to turn it off
+```
+
+Reading the hotkey device needs permission, which
+`/etc/udev/rules.d/99-victus-hotkey.rules` grants to the `victus` group. That
+device only carries the firmware hotkeys — brightness, mic mute, OMEN — never
+the typing keyboard, so this does not expose keystrokes. It is deliberately
+narrower than adding your user to the `input` group, which would hand over every
+input device including the real keyboard.
+
+If the key does nothing, check in this order:
+
+```bash
+systemctl --user is-active victus-hotkeyd     # should print "active"
+ls -l /dev/input/by-path/*event-kbd           # device present at all?
+journalctl --user -u victus-hotkeyd -n 20     # should say it is watching
+```
+
+The event node number is not stable across reboots or DKMS rebuilds, so the
+daemon finds the device by name and re-scans every 5 s if it disappears — a
+module reload does not require restarting the service.
 
 ---
 
 ## Daily usage
 
 Launch the GTK app (`victus-control`) or use the CLI client (`test_backend.py`).
+Press the OMEN key, or pick it from the desktop menu.
 
 Everything lives on one page, with a card per subsystem.
 
