@@ -631,8 +631,6 @@ void VictusFanControl::draw_gpu(GtkDrawingArea *, cairo_t *cr, int w, int h, gpo
 
 namespace {
 
-// Categorical slots 1 and 2, validated for CVD separation against the card
-// surface (protan dE 15.9, tritan 30.5, normal 26.5 under an all-pairs run).
 // Deliberately not the amber/red/green used for temperature status, which are
 // reserved for state and must not double as series identity.
 // The documented default categorical order, dark steps. Validated on the card
@@ -707,8 +705,6 @@ void VictusFanControl::on_history_toggled(GObject *sw, GParamSpec *, gpointer da
     self->save_history_preference();
 }
 
-
-
 void VictusFanControl::build_history_series()
 {
     struct Spec {
@@ -769,12 +765,6 @@ void toggle_series(std::vector<ChartSeries> &series, int index)
 }
 
 } // namespace
-
-
-
-
-
-
 
 void VictusFanControl::draw_history_overlay(GtkDrawingArea *, cairo_t *cr, int w, int h, gpointer data)
 {

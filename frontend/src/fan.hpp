@@ -46,13 +46,13 @@ private:
 	bool cpu_valid = false;
 	bool gpu_valid = false;
 
-	// Rotor angles advance from the measured RPM, so the blades visibly track
-	// how hard the fans are actually working.
 	// Previous /proc/stat totals, so CPU load is a delta between refreshes
 	// rather than the meaningless since-boot average.
 	unsigned long long prev_cpu_total = 0;
 	unsigned long long prev_cpu_idle = 0;
 
+	// Rotor angles advance from the measured RPM, so the blades visibly track
+	// how hard the fans are actually working.
 	double fan1_angle = 0.0;
 	double fan2_angle = 0.0;
 	guint gauge_tick_id = 0;
@@ -62,9 +62,7 @@ private:
 	GtkWidget *cpu_temp_label;
 	GtkWidget *gpu_temp_label;
 
-	// Rolling telemetry history, drawn as two separate charts. Temperature and
-	// RPM never share an axis: one grid for two unrelated scales would imply a
-	// relationship that is not there.
+	// Rolling telemetry history, overlaid in one chart with an axis per series.
 	GtkWidget *history_box;        // the whole section, hidden when switched off
 	GtkWidget *history_switch;
 	GtkWidget *history_chart;
