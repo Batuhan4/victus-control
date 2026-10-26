@@ -82,7 +82,7 @@ reload_patched_hp_wmi() {
         return 1
     fi
 
-    if lsmod | grep -q '^hp_wmi\b'; then
+    if [[ -d /sys/module/hp_wmi ]]; then
         modprobe -r hp_wmi || rmmod hp_wmi
     fi
 
@@ -149,12 +149,12 @@ ensure_users_and_groups() {
         echo "User 'victus-backend' already exists."
     fi
 
-    if ! groups victus-backend | grep -q '\bvictus\b'; then
+    if [[ " $(id -nG victus-backend) " != *" victus "* ]]; then
         usermod -aG victus victus-backend
         echo "User 'victus-backend' added to the 'victus' group."
     fi
 
-    if [[ -n "${SUDO_USER:-}" ]] && ! groups "${SUDO_USER}" | grep -q '\bvictus\b'; then
+    if [[ -n "${SUDO_USER:-}" && " $(id -nG "${SUDO_USER}") " != *" victus "* ]]; then
         usermod -aG victus "${SUDO_USER}"
         echo "User '${SUDO_USER}' added to the 'victus' group."
     fi
