@@ -89,10 +89,10 @@ if ! hp_wmi_module_path_is_dkms "${module_path}"; then
     fi
 fi
 
-if ! lsmod | grep -q '^hp_wmi' || ! hp_wmi_fan_interface_ready; then
+if [[ ! -d /sys/module/hp_wmi ]] || ! hp_wmi_fan_interface_ready; then
     echo "$log_prefix reloading hp_wmi kernel module" >&2
     modprobe led_class_multicolor >/dev/null 2>&1 || true
-    if lsmod | grep -q '^hp_wmi'; then
+    if [[ -d /sys/module/hp_wmi ]]; then
         modprobe -r hp_wmi >/dev/null 2>&1 || rmmod hp_wmi >/dev/null 2>&1 || true
     fi
     modprobe hp_wmi || echo "$log_prefix warning: failed to load hp_wmi module" >&2

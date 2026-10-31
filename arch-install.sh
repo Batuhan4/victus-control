@@ -82,7 +82,7 @@ reload_patched_hp_wmi() {
         return 1
     fi
 
-    if lsmod | grep -q '^hp_wmi\b'; then
+    if [[ -d /sys/module/hp_wmi ]]; then
         modprobe -r hp_wmi || rmmod hp_wmi
     fi
 
@@ -112,6 +112,7 @@ install_arch_dependencies() {
 
     for module_dir in /usr/lib/modules/*; do
         [[ -d "${module_dir}" ]] || continue
+        [[ -r "${module_dir}/pkgbase" || -d "${module_dir}/build" ]] || continue
 
         pkgbase_path="${module_dir}/pkgbase"
         kernel_release="$(basename "${module_dir}")"
@@ -171,12 +172,12 @@ ensure_users_and_groups() {
         echo "User 'victus-backend' already exists."
     fi
 
-    if ! groups victus-backend | grep -q '\bvictus\b'; then
+    if [[ " $(id -nG victus-backend) " != *" victus "* ]]; then
         usermod -aG victus victus-backend
         echo "User 'victus-backend' added to the 'victus' group."
     fi
 
-    if [[ -n "${SUDO_USER:-}" ]] && ! groups "${SUDO_USER}" | grep -q '\bvictus\b'; then
+    if [[ -n "${SUDO_USER:-}" && " $(id -nG "${SUDO_USER}") " != *" victus "* ]]; then
         usermod -aG victus "${SUDO_USER}"
         echo "User '${SUDO_USER}' added to the 'victus' group."
     fi
@@ -256,6 +257,7 @@ install_hp_wmi_dkms() {
 
     for module_dir in /usr/lib/modules/*; do
         [[ -d "${module_dir}" ]] || continue
+        [[ -d "${module_dir}/build" || -d "${module_dir}/source" ]] || continue
         kernel_release="$(basename "${module_dir}")"
         kernel_status="$(dkms status -m "${module_name}" -v "${module_version}" -k "${kernel_release}" || true)"
         if [[ "${kernel_status}" != *"installed"* ]]; then
