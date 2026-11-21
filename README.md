@@ -212,17 +212,20 @@ Press the OMEN key, or pick it from the desktop menu.
 
 Everything lives on one page, with a card per subsystem.
 
-**Cooling card** — the profile dropdown offers `AUTO`, `Better Auto`, `MANUAL`, `MAX`:
+**Cooling card** — a segmented control offers `Auto`, `Better Auto`, `Manual` and `Max`, one click each, with a line under it saying what the active profile does:
 
-- *Better Auto* is enforced by the background service on each boot, keeps fans in manual PWM, and adjusts RPM from temperature and utilisation — ideal for gaming or heavy workloads.
-- *Manual* maps slider positions to calibrated RPM steps; fan 2 honours the 10 s offset automatically.
+- *Better Auto* keeps fans in manual PWM and adjusts RPM from temperature and utilisation — ideal for gaming or heavy workloads. It is the default on boards that support it, until you pick something else.
+- *Manual* shows a speed slider that maps positions to calibrated RPM steps; fan 2 honours the 10 s offset automatically.
+- *Max* runs both fans flat out, and is tinted amber while active so it never passes for the resting state.
+
+**The profile you pick is remembered.** The backend saves it (and the manual speed, in `Manual`) to `/var/lib/victus-control/fan.conf` and applies it again when the service starts, so `Max` is still `Max` after a reboot. It does not matter whether the choice was made in the app, the panel applet or the GNOME extension.
 
 Fan speed and temperature are shown as analog dials with the digital value under each. The rotor blades turn at a rate derived from the measured RPM, and a stopped fan renders grey rather than merely still. Thermometers and readouts shift cyan → amber → red, crossing at 70 °C and 85 °C.
 
 > [!NOTE]
-> On boards whose firmware exposes no fan speed targets, manual speed is removed from the card entirely and both `MANUAL` and `Better Auto` are dropped from the profile list, since both steer the fans through those targets. `AUTO` and `MAX` remain, and the backend leaves such boards on the firmware curve at start-up.
+> On boards whose firmware exposes no fan speed targets, manual speed is removed from the card entirely and both `MANUAL` and `Better Auto` are dropped from the profile list, since both steer the fans through those targets. `AUTO` and `MAX` remain, and unless you saved `MAX` the backend leaves such boards on the firmware curve at start-up.
 
-**Keyboard card** — a switch turns the backlight on and off, a row of style radios picks the lighting mode, and the speed slider or colour picker appears depending on which style is selected. There is no Apply step; changing anything applies it.
+**Keyboard card** — a switch turns the backlight on and off, a segmented control picks the lighting style, and the speed slider or colour picker appears depending on which style is selected. There is no Apply step; changing anything applies it.
 
 Backend status: `systemctl status victus-backend.service` (logs via `journalctl -u victus-backend`).
 
@@ -297,19 +300,18 @@ desktop app is not needed for everyday adjustments.
 
 <br>
 
-| Menu | Fan mode | History |
-| :--: | :------: | :-----: |
-| <img src="docs/images/cinnamon-applet.png" width="250" alt="Applet menu"> | <img src="docs/images/cinnamon-applet-fanmode.png" width="250" alt="Fan mode submenu"> | <img src="docs/images/cinnamon-applet-graphs.png" width="250" alt="Applet sparklines"> |
-| Live RPM and temperatures, backlight switch and sliders | Mode submenu with the active mode marked | Sparklines, each on its own scale |
+<img src="docs/images/cinnamon-applet.png" width="300" alt="Applet menu">
+
+*Readings as tiles, sparklines under them, then one-click fan mode and lighting style.*
 
 </div>
 
 | | In the menu |
 | :-: | --- |
-| 🌀 | **Fan mode** — Auto, Better Auto, Max (and Manual where the firmware supports it) |
-| 📊 | **Live telemetry** — both fan RPMs and CPU/GPU temperature |
+| 📊 | **Live telemetry** — CPU/GPU temperature and both fan RPMs as tiles; temperatures turn amber at 70 °C and red at 85 °C |
+| 🌀 | **Fan mode** — Auto and Max (plus Better Auto and Manual where the firmware supports them) as a row of buttons, the active one highlighted. Remembered across reboots |
 | ⌨️ | **Keyboard backlight** — on/off switch and a brightness slider |
-| 🌈 | **Lighting effect** — Static, Rainbow, Breathe (and Flow on four-zone boards) with a speed slider |
+| 🌈 | **Lighting effect** — Static, Rainbow, Breathe (and Flow on four-zone boards) as a row of buttons, with a speed slider |
 
 The panel itself shows CPU temperature by default; right-click → *Configure* to
 show fan RPM instead, or just the icon.
@@ -323,7 +325,7 @@ not appear, restart Cinnamon with <kbd>Alt</kbd>+<kbd>F2</kbd>, then `r`, Enter.
 
 > [!NOTE]
 > Controls that the hardware cannot honour are hidden rather than shown inert:
-> **Manual** fan mode is absent where the firmware refuses fan speed targets, and
+> **Manual** and **Better Auto** are absent where the firmware refuses fan speed targets, and
 > **Flow** is absent on single-zone keyboards.
 
 > [!TIP]

@@ -4,25 +4,28 @@
 
 namespace {
 
-// Dark "performance" palette in the spirit of the Victus chassis: a near-black
-// carbon base, cool grey panels, and an electric cyan accent, with amber and
-// red reserved for temperature warnings so colour always carries meaning.
+// Dark palette in the spirit of the Victus chassis: a near-black carbon base,
+// cool grey panels and one electric cyan accent. Cyan marks what is selected
+// or interactive; amber and red are reserved for warnings and heat, so colour
+// always carries meaning. Surfaces are flat - no glows - so the readings, not
+// the chrome, are what the eye lands on.
 const char *kVictusCss = R"CSS(
 @define-color victus_bg          #0a0d12;
-@define-color victus_surface     #121822;
+@define-color victus_surface     #111722;
 @define-color victus_surface_alt #18202c;
-@define-color victus_border      #243040;
+@define-color victus_well        #0b1018;
+@define-color victus_border      #222d3c;
 @define-color victus_accent      #00d9ff;
 @define-color victus_accent_dim  #0596b3;
 @define-color victus_text        #e6edf5;
-@define-color victus_text_dim    #7d8da3;
+@define-color victus_text_dim    #8696ab;
 @define-color victus_warn        #ffa726;
 @define-color victus_hot         #ff4757;
 @define-color victus_ok          #00e676;
 
-/* GTK draws radios, focus rings and selections from its own accent colours,
-   which follow the desktop's accent (orange on Ubuntu) and would otherwise
-   clash with everything here. Point them at the app accent. */
+/* GTK draws focus rings and selections from its own accent colours, which
+   follow the desktop's accent (orange on Ubuntu) and would otherwise clash
+   with everything here. Point them at the app accent. */
 @define-color accent_color @victus_accent;
 @define-color accent_bg_color @victus_accent;
 @define-color accent_fg_color #06222b;
@@ -33,72 +36,74 @@ window,
 .victus-root {
   background-color: @victus_bg;
   color: @victus_text;
-  font-family: "Inter", "Cantarell", "Segoe UI", sans-serif;
+  font-family: "Inter", "Cantarell", "Ubuntu", "Segoe UI", sans-serif;
 }
 
 /* Title bar: a slim carbon strip with an accent hairline under it. */
 headerbar {
-  background: linear-gradient(180deg, #151d29 0%, #0d1219 100%);
-  border-bottom: 1px solid @victus_accent_dim;
-  box-shadow: 0 1px 12px rgba(0, 217, 255, 0.18);
-  min-height: 42px;
-  padding: 0 6px;
+  background: @victus_surface;
+  border-bottom: 1px solid alpha(@victus_accent, 0.35);
+  box-shadow: none;
+  min-height: 40px;
+  padding: 0 8px;
 }
 
 headerbar label {
-  font-weight: 700;
-  letter-spacing: 2px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 2.4px;
   color: @victus_text;
-  text-shadow: 0 0 10px rgba(0, 217, 255, 0.55);
 }
 
-/* Tabs read as angular console buttons, with the active one underlined. */
-notebook > header {
-  background-color: @victus_bg;
-  border-bottom: 1px solid @victus_border;
-  padding-top: 4px;
-}
-
-notebook > header > tabs > tab {
-  background-color: transparent;
+/* Window controls and the menu button are small round targets, not the
+   padded console buttons used in the cards. */
+headerbar button,
+windowcontrols > button {
+  background: none;
   border: none;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  padding: 8px 22px;
+  box-shadow: none;
+  border-radius: 999px;
+  padding: 0;
   margin: 0 2px;
-  min-height: 30px;
+  min-width: 28px;
+  min-height: 28px;
   color: @victus_text_dim;
-  font-weight: 700;
-  letter-spacing: 1.6px;
-  transition: color 160ms ease, border-color 160ms ease, background-color 160ms ease;
+  letter-spacing: 0;
 }
 
-notebook > header > tabs > tab:hover {
+headerbar button:hover,
+windowcontrols > button:hover {
+  background-color: alpha(@victus_text, 0.10);
   color: @victus_text;
-  background-color: rgba(0, 217, 255, 0.06);
+  box-shadow: none;
 }
 
-notebook > header > tabs > tab:checked {
+headerbar button:active,
+headerbar button:checked {
+  background-color: alpha(@victus_accent, 0.20);
   color: @victus_accent;
-  border-bottom-color: @victus_accent;
-  background-color: rgba(0, 217, 255, 0.09);
 }
 
-notebook > stack,
+windowcontrols > button.close:hover {
+  background-color: @victus_hot;
+  color: #ffffff;
+}
+
 scrolledwindow,
 scrolledwindow > viewport {
   background-color: @victus_bg;
 }
 
 scrollbar {
-  background-color: @victus_bg;
+  background-color: transparent;
   border: none;
 }
 
 scrollbar slider {
   background-color: @victus_border;
-  border-radius: 3px;
-  min-width: 7px;
+  border-radius: 999px;
+  min-width: 6px;
+  min-height: 6px;
 }
 
 scrollbar slider:hover {
@@ -109,21 +114,16 @@ scrollbar slider:hover {
 .victus-card {
   background-color: @victus_surface;
   border: 1px solid @victus_border;
-  border-radius: 4px;
-  padding: 16px;
-}
-
-.victus-card:hover {
-  border-color: alpha(@victus_accent, 0.35);
+  border-radius: 12px;
+  padding: 18px 20px 20px 20px;
 }
 
 /* Small uppercase heading that labels a panel. */
 .section-title {
   font-size: 11px;
   font-weight: 800;
-  letter-spacing: 2.4px;
+  letter-spacing: 2.2px;
   color: @victus_accent;
-  text-shadow: 0 0 8px rgba(0, 217, 255, 0.35);
 }
 
 .section-icon {
@@ -136,38 +136,60 @@ scrollbar slider:hover {
   -gtk-icon-size: 13px;
 }
 
-/* Explains a control that hardware will not honour. */
+/* A telemetry tile: one reading, in its own recessed panel. */
+.stat-tile {
+  background-color: @victus_well;
+  border: 1px solid @victus_border;
+  border-radius: 10px;
+  padding: 12px 8px 10px 8px;
+}
+
+/* Something the user needs to know is limiting what they can do. */
 .notice {
   color: @victus_warn;
   font-size: 12px;
-  background-color: rgba(255, 167, 38, 0.08);
+  background-color: alpha(@victus_warn, 0.08);
   border-left: 3px solid @victus_warn;
-  border-radius: 2px;
+  border-radius: 4px;
   padding: 8px 10px;
+}
+
+/* A standing fact about the hardware: present, but not shouting. */
+.footnote {
+  color: @victus_text_dim;
+  font-size: 11.5px;
+}
+
+.error-text {
+  color: @victus_hot;
 }
 
 .field-label {
   color: @victus_text_dim;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 1.1px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+}
+
+/* Row captions share a width so the controls beside them line up. */
+.row-label {
+  min-width: 62px;
 }
 
 /* Numeric telemetry: monospace so digits do not jitter as values change. */
 .readout {
-  font-family: "JetBrains Mono", "Fira Code", "DejaVu Sans Mono", monospace;
+  font-family: "JetBrains Mono", "Fira Code", "Ubuntu Mono", "DejaVu Sans Mono", monospace;
   font-size: 22px;
   font-weight: 700;
-  color: @victus_accent;
-  text-shadow: 0 0 14px rgba(0, 217, 255, 0.45);
+  color: @victus_text;
 }
 
-.readout.warn { color: @victus_warn; text-shadow: 0 0 14px rgba(255, 167, 38, 0.45); }
-.readout.hot  { color: @victus_hot;  text-shadow: 0 0 16px rgba(255, 71, 87, 0.55); }
-.readout.ok   { color: @victus_ok;   text-shadow: 0 0 14px rgba(0, 230, 118, 0.40); }
+.readout.warn { color: @victus_warn; }
+.readout.hot  { color: @victus_hot; }
+.readout.ok   { color: @victus_ok; }
 
 .readout-unit {
-  font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+  font-family: "JetBrains Mono", "Ubuntu Mono", "DejaVu Sans Mono", monospace;
   font-size: 11px;
   font-weight: 600;
   color: @victus_text_dim;
@@ -176,216 +198,221 @@ scrollbar slider:hover {
 .status-line {
   color: @victus_text_dim;
   font-size: 12px;
-  letter-spacing: 0.6px;
 }
 
-/* Buttons: squared off, hairline border, accent wash on hover. */
+.mono {
+  font-family: "JetBrains Mono", "Ubuntu Mono", "DejaVu Sans Mono", monospace;
+  font-size: 11px;
+}
+
+/* Buttons. */
 button {
-  background: linear-gradient(180deg, @victus_surface_alt 0%, @victus_surface 100%);
+  background: @victus_surface_alt;
   border: 1px solid @victus_border;
-  border-radius: 3px;
+  border-radius: 8px;
+  box-shadow: none;
   color: @victus_text;
-  padding: 9px 16px;
+  padding: 8px 16px;
   font-weight: 700;
-  letter-spacing: 1.2px;
-  transition: all 160ms ease;
+  letter-spacing: 0.4px;
+  transition: all 140ms ease;
 }
 
 button:hover {
-  border-color: @victus_accent;
+  border-color: alpha(@victus_accent, 0.7);
   color: @victus_accent;
-  box-shadow: 0 0 14px rgba(0, 217, 255, 0.22);
 }
 
 button:active {
-  background: @victus_accent_dim;
-  color: @victus_bg;
+  background: alpha(@victus_accent, 0.22);
 }
 
 button:disabled {
   color: alpha(@victus_text_dim, 0.5);
   border-color: alpha(@victus_border, 0.6);
-  box-shadow: none;
+}
+
+button:focus-visible {
+  outline: 2px solid alpha(@victus_accent, 0.6);
+  outline-offset: 1px;
+}
+
+button.flat {
+  background: none;
+  border-color: transparent;
 }
 
 /* The one prominent action on a page. */
 button.primary-action {
-  background: linear-gradient(180deg, @victus_accent 0%, @victus_accent_dim 100%);
+  background: @victus_accent;
   border-color: @victus_accent;
   color: #06222b;
   font-weight: 800;
 }
 
 button.primary-action:hover {
-  box-shadow: 0 0 22px rgba(0, 217, 255, 0.5);
+  background: shade(@victus_accent, 1.1);
   color: #06222b;
 }
 
-/* Power toggle reads as lit when the backlight is on. */
-button.power-toggle {
-  font-size: 13px;
-  padding: 12px;
+/* Segmented control: a recessed track holding one button per choice, the
+   active one raised and tinted. Used for the cooling profile and the lighting
+   style, so "pick one of a few" looks the same everywhere. */
+.segmented {
+  background-color: @victus_well;
+  border: 1px solid @victus_border;
+  border-radius: 10px;
+  padding: 3px;
 }
 
-button.power-toggle.is-on {
-  border-color: @victus_ok;
-  color: @victus_ok;
-  box-shadow: 0 0 16px rgba(0, 230, 118, 0.25) inset;
+.segmented > button {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 8px 10px;
+  color: @victus_text_dim;
+  font-weight: 700;
+  letter-spacing: 0.3px;
 }
 
-button.power-toggle.is-off {
-  border-color: @victus_border;
+.segmented > button:hover {
+  background-color: alpha(@victus_text, 0.06);
+  border-color: transparent;
+  color: @victus_text;
+}
+
+.segmented > button:checked {
+  background-color: alpha(@victus_accent, 0.16);
+  border-color: alpha(@victus_accent, 0.55);
+  color: @victus_accent;
+}
+
+/* A choice with a cost (MAX is loud) is amber when active, so it never looks
+   like the resting state. */
+.segmented > button.loud:checked {
+  background-color: alpha(@victus_warn, 0.15);
+  border-color: alpha(@victus_warn, 0.6);
+  color: @victus_warn;
+}
+
+.segmented:disabled > button:checked {
+  background-color: alpha(@victus_text_dim, 0.12);
+  border-color: alpha(@victus_text_dim, 0.3);
   color: @victus_text_dim;
 }
 
-/* Material-style backlight switch: pill track, circular knob, accent when on. */
+/* Switch: pill track, round knob, accent when on. */
 switch {
-  background-color: #0c1119;
+  background-color: @victus_well;
   border: 1px solid @victus_border;
-  border-radius: 15px;
-  min-width: 50px;
-  min-height: 26px;
+  border-radius: 999px;
+  min-width: 44px;
+  min-height: 24px;
   padding: 2px;
-  transition: background-color 200ms ease, border-color 200ms ease,
-              box-shadow 200ms ease;
+  transition: background-color 180ms ease, border-color 180ms ease;
 }
 
 switch:checked {
   background-color: @victus_accent_dim;
   border-color: @victus_accent;
-  box-shadow: 0 0 16px rgba(0, 217, 255, 0.45);
 }
 
 switch > slider {
   background: @victus_text_dim;
   border: none;
-  border-radius: 50%;
-  min-width: 20px;
-  min-height: 20px;
+  box-shadow: none;
+  border-radius: 999px;
+  min-width: 18px;
+  min-height: 18px;
   margin: 0;
-  transition: background 200ms ease;
+  transition: background 180ms ease;
 }
 
 switch:checked > slider {
   background: #ffffff;
 }
 
+switch > image {
+  opacity: 0;
+}
+
 switch:disabled {
   opacity: 0.45;
 }
 
-/* Style selector: radios that read as chips rather than form controls. */
-checkbutton.style-radio {
-  color: @victus_text_dim;
-  font-weight: 700;
-  letter-spacing: 0.8px;
-  padding: 4px 6px;
-  transition: color 160ms ease;
-}
-
-checkbutton.style-radio:hover {
-  color: @victus_text;
-}
-
-checkbutton.style-radio:checked {
-  color: @victus_accent;
-}
-
-checkbutton.style-radio > radio,
-checkbutton.style-radio > check {
-  background-color: #0c1119;
-  border: 1px solid @victus_border;
-  min-width: 15px;
-  min-height: 15px;
-  transition: all 160ms ease;
-}
-
-checkbutton.style-radio:checked > radio,
-checkbutton.style-radio:checked > check,
-checkbutton.style-radio radio:checked,
-checkbutton.style-radio check:checked {
-  background-color: @victus_accent;
-  background-image: none;
-  border-color: @victus_accent;
-  color: @victus_bg;
-  box-shadow: 0 0 10px rgba(0, 217, 255, 0.6);
-}
-
-/* Sliders: thin dark rail, glowing accent fill, square-ish knob. */
+/* Sliders: thin dark rail, accent fill, round knob. */
 scale {
-  min-height: 26px;
+  min-height: 24px;
+  padding: 6px 0;
 }
 
 scale trough {
-  background-color: #0c1119;
+  background-color: @victus_well;
   border: 1px solid @victus_border;
-  border-radius: 2px;
-  min-height: 6px;
+  border-radius: 999px;
+  min-height: 4px;
 }
 
 scale highlight {
-  background: linear-gradient(90deg, @victus_accent_dim 0%, @victus_accent 100%);
-  border-radius: 2px;
-  box-shadow: 0 0 12px rgba(0, 217, 255, 0.55);
+  background: @victus_accent;
+  border: none;
+  border-radius: 999px;
+  min-height: 4px;
+  margin: -1px;
 }
 
 scale slider {
-  background: @victus_text;
-  border: 2px solid @victus_accent;
-  border-radius: 3px;
-  min-width: 14px;
-  min-height: 14px;
-  margin: -6px;
-  box-shadow: 0 0 10px rgba(0, 217, 255, 0.6);
-  transition: box-shadow 160ms ease;
+  background: #ffffff;
+  border: 3px solid @victus_accent;
+  border-radius: 999px;
+  box-shadow: none;
+  min-width: 10px;
+  min-height: 10px;
+  margin: -7px;
+  transition: border-color 140ms ease;
 }
 
 scale slider:hover {
-  box-shadow: 0 0 18px rgba(0, 217, 255, 0.9);
+  border-color: shade(@victus_accent, 1.15);
 }
 
 scale value {
-  font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+  font-family: "JetBrains Mono", "Ubuntu Mono", "DejaVu Sans Mono", monospace;
+  font-size: 12px;
   font-weight: 700;
-  color: @victus_accent;
-}
-
-/* Dropdowns. */
-dropdown > button,
-combobox button.combo {
-  background: @victus_surface_alt;
-  border: 1px solid @victus_border;
-  border-radius: 3px;
   color: @victus_text;
-  letter-spacing: 1px;
+  margin-left: 12px;
+  min-width: 26px;
 }
 
-dropdown > button:hover,
-combobox button.combo:hover {
-  border-color: @victus_accent;
-  color: @victus_accent;
+scale marks indicator {
+  background-color: @victus_border;
+  min-height: 4px;
+  min-width: 1px;
 }
 
-popover > contents,
-dropdown popover > contents {
+scale:disabled {
+  opacity: 0.45;
+}
+
+popover > contents {
   background-color: @victus_surface;
   border: 1px solid @victus_border;
-  border-radius: 4px;
+  border-radius: 10px;
   color: @victus_text;
   padding: 4px;
 }
 
-popover listview > row:selected,
-dropdown listview > row:selected {
-  background-color: alpha(@victus_accent, 0.18);
-  color: @victus_accent;
+popover > arrow {
+  background-color: @victus_surface;
+  border: 1px solid @victus_border;
 }
 
 /* The drawn keyboard sits in its own recessed well. */
 .keyboard-stage {
-  background-color: #070a0e;
+  background-color: @victus_well;
   border: 1px solid @victus_border;
-  border-radius: 4px;
+  border-radius: 10px;
   padding: 10px;
 }
 
@@ -409,9 +436,15 @@ dialog label {
 }
 
 tooltip {
-  background-color: @victus_surface;
-  border: 1px solid @victus_accent_dim;
+  background-color: @victus_surface_alt;
+  border: 1px solid @victus_border;
+  border-radius: 6px;
   color: @victus_text;
+}
+
+tooltip label {
+  color: @victus_text;
+  font-size: 12px;
 }
 )CSS";
 

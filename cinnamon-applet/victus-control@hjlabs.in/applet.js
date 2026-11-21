@@ -96,6 +96,138 @@ function clamp(value, low, high) {
     return Math.max(low, Math.min(high, value));
 }
 
+// Inline styles, because an applet cannot assume anything about the desktop
+// theme. Fills are translucent greys and tints, and unselected text keeps the
+// theme's own colour, so the menu reads correctly on light and dark themes.
+const ACCENT_RGB = '0, 190, 230';
+const LOUD_RGB = '255, 167, 38';     // a choice with a cost: MAX is loud
+const WARN_COLOUR = '#ffa726';
+const HOT_COLOUR = '#ff4757';
+
+const TILE_STYLE = 'background-color: rgba(128, 128, 128, 0.14); border-radius: 7px; padding: 7px 4px 6px 4px;';
+const TILE_VALUE_STYLE = 'font-size: 13pt; font-weight: bold; text-align: center;';
+const TILE_CAPTION_STYLE = 'font-size: 7.5pt; font-weight: bold; text-align: center;';
+const CAPTION_STYLE = 'font-size: 7.5pt; font-weight: bold;';
+const TRACK_STYLE = 'spacing: 3px; padding: 3px; border-radius: 8px; background-color: rgba(128, 128, 128, 0.14);';
+const SEGMENT_BASE = 'padding: 5px 6px; border-radius: 6px; border: 1px solid ';
+
+/* The readings, as a row of tiles: the number large, what it is small. A glance
+ * at the menu answers "how hot, how fast" without reading a sentence. */
+class StatRow extends PopupMenu.PopupBaseMenuItem {
+    constructor(specs) {
+        super({ reactive: false });
+        // A row that cannot be activated is drawn greyed out by the theme,
+        // which is right for a caption and wrong for the readings.
+        this.actor.remove_style_pseudo_class('insensitive');
+
+        this._values = {};
+        this.box = new St.BoxLayout({ style: 'spacing: 6px;' });
+
+        specs.forEach(Lang.bind(this, function (spec) {
+            let tile = new St.BoxLayout({ vertical: true, style: TILE_STYLE });
+            let value = new St.Label({ text: '--', style: TILE_VALUE_STYLE });
+            let caption = new St.Label({ text: spec.caption, style: TILE_CAPTION_STYLE });
+            caption.set_opacity(150);
+            tile.add(value, { x_fill: true });
+            tile.add(caption, { x_fill: true });
+            this._values[spec.key] = value;
+            this.box.add(tile, { expand: true, x_fill: true });
+        }));
+
+        this.addActor(this.box, { span: -1, expand: true });
+    }
+
+    // `celsius` is passed for temperatures so a hot reading changes colour and
+    // is obvious without reading the number.
+    set(key, text, celsius) {
+        let label = this._values[key];
+        if (!label)
+            return;
+
+        let colour = '';
+        if (typeof celsius === 'number' && !isNaN(celsius)) {
+            if (celsius >= 85)
+                colour = ' color: ' + HOT_COLOUR + ';';
+            else if (celsius >= 70)
+                colour = ' color: ' + WARN_COLOUR + ';';
+        }
+        label.set_text(text);
+        label.set_style(TILE_VALUE_STYLE + colour);
+    }
+}
+
+/* A small dim heading that groups the rows under it. */
+class CaptionItem extends PopupMenu.PopupBaseMenuItem {
+    constructor(text) {
+        super({ reactive: false });
+        this.label = new St.Label({ text: text, style: CAPTION_STYLE });
+        this.label.set_opacity(150);
+        this.addActor(this.label, { span: -1, expand: true });
+    }
+}
+
+/* Pick one of a few: every choice on show and one click away, where a submenu
+ * needed two clicks and hid what was selected until it was opened. */
+class SegmentedRow extends PopupMenu.PopupBaseMenuItem {
+    constructor(options, onPick) {
+        super({ reactive: false });
+        // The row itself is not a menu entry, but its buttons are live, so it
+        // must not take the theme's greyed-out look.
+        this.actor.remove_style_pseudo_class('insensitive');
+
+        this._buttons = {};
+        this._selected = null;
+        this.box = new St.BoxLayout({ style: TRACK_STYLE });
+
+        options.forEach(Lang.bind(this, function (option) {
+            let button = new St.Button({
+                label: option.label,
+                reactive: true,
+                can_focus: true,
+                track_hover: true,
+            });
+            button._loud = !!option.loud;
+            button.connect('clicked', function () {
+                onPick(option.key);
+            });
+            button.connect('notify::hover', Lang.bind(this, this._restyle));
+            this._buttons[option.key] = button;
+            this.box.add(button, { expand: true, x_fill: true });
+        }));
+
+        this.addActor(this.box, { span: -1, expand: true });
+        this._restyle();
+    }
+
+    setSelected(key) {
+        if (this._selected === key)
+            return;
+        this._selected = key;
+        this._restyle();
+    }
+
+    setOptionVisible(key, visible) {
+        if (this._buttons[key])
+            this._buttons[key].visible = visible;
+    }
+
+    _restyle() {
+        for (let key in this._buttons) {
+            let button = this._buttons[key];
+            let style;
+            if (key === this._selected) {
+                let rgb = button._loud ? LOUD_RGB : ACCENT_RGB;
+                style = SEGMENT_BASE + 'rgba(' + rgb + ', 0.75); background-color: rgba(' + rgb + ', 0.26); font-weight: bold;';
+            } else if (button.hover) {
+                style = SEGMENT_BASE + 'transparent; background-color: rgba(128, 128, 128, 0.22);';
+            } else {
+                style = SEGMENT_BASE + 'transparent;';
+            }
+            button.set_style(style);
+        }
+    }
+}
+
 /* A slider row with a leading icon, matching the layout of Cinnamon's own
  * brightness slider in the power applet. */
 class LabelledSlider extends PopupMenu.PopupSliderMenuItem {
@@ -282,11 +414,18 @@ class VictusApplet extends Applet.TextIconApplet {
     // ---- menu ---------------------------------------------------------------
 
     _buildMenu() {
+        // --- Readings ---
+        this._stats = new StatRow([
+            { key: 'cpu', caption: 'CPU' },
+            { key: 'gpu', caption: 'GPU' },
+            { key: 'fan1', caption: 'FAN 1' },
+            { key: 'fan2', caption: 'FAN 2' },
+        ]);
+        this.menu.addMenuItem(this._stats);
+
+        // Only shown when there is something to say: the backend is down.
         this._statusItem = new PopupMenu.PopupMenuItem('Connecting to victus-backend…', { reactive: false });
         this.menu.addMenuItem(this._statusItem);
-
-        this._tempItem = new PopupMenu.PopupMenuItem('', { reactive: false });
-        this.menu.addMenuItem(this._tempItem);
 
         // History sparklines, one per measure.
         this._tempGraph = new Sparkline('CPU TEMPERATURE', SERIES_A, '\u00b0C');
@@ -294,39 +433,29 @@ class VictusApplet extends Applet.TextIconApplet {
         this.menu.addMenuItem(this._tempGraph);
         this.menu.addMenuItem(this._fanGraph);
 
-        this._graphSwitch = new PopupMenu.PopupSwitchMenuItem('History graphs', true);
-        this._graphSwitch.connect('toggled', Lang.bind(this, function (item, state) {
-            this.showGraphs = state;
-            this.settings.setValue('show-graphs', state);
-            this._applyGraphVisibility();
-        }));
-        this.menu.addMenuItem(this._graphSwitch);
-
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         // --- Cooling ---
-        this._fanNoteItem = new PopupMenu.PopupMenuItem('', { reactive: false });
-        this.menu.addMenuItem(this._fanNoteItem);
-        this._fanNoteItem.actor.hide();
+        this._fanCaption = new CaptionItem('FAN MODE');
+        this.menu.addMenuItem(this._fanCaption);
 
-        this._fanModeMenu = new PopupMenu.PopupSubMenuMenuItem('Fan mode');
-        this.menu.addMenuItem(this._fanModeMenu);
-
-        this._fanModeItems = {};
-        ['AUTO', 'BETTER_AUTO', 'MANUAL', 'MAX'].forEach(Lang.bind(this, function (mode) {
-            let item = new PopupMenu.PopupMenuItem(FAN_MODE_LABELS[mode]);
-            item.connect('activate', Lang.bind(this, function () {
-                this._setFanMode(mode);
-            }));
-            this._fanModeItems[mode] = item;
-            this._fanModeMenu.menu.addMenuItem(item);
-        }));
+        this._fanModeRow = new SegmentedRow([
+            { key: 'AUTO', label: FAN_MODE_LABELS.AUTO },
+            { key: 'BETTER_AUTO', label: FAN_MODE_LABELS.BETTER_AUTO },
+            { key: 'MANUAL', label: FAN_MODE_LABELS.MANUAL },
+            { key: 'MAX', label: FAN_MODE_LABELS.MAX, loud: true },
+        ], Lang.bind(this, this._setFanMode));
+        this.menu.addMenuItem(this._fanModeRow);
 
         this._fanSpeedSlider = new LabelledSlider('weather-windy-symbolic', Lang.bind(this, function (value) {
             this._setFanSpeed(value);
         }));
         this.menu.addMenuItem(this._fanSpeedSlider);
         this._fanSpeedSlider.actor.hide();
+
+        this._fanNoteItem = new CaptionItem('');
+        this.menu.addMenuItem(this._fanNoteItem);
+        this._fanNoteItem.actor.hide();
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
@@ -342,18 +471,13 @@ class VictusApplet extends Applet.TextIconApplet {
         }));
         this.menu.addMenuItem(this._kbdSlider);
 
-        this._effectMenu = new PopupMenu.PopupSubMenuMenuItem('Lighting effect');
-        this.menu.addMenuItem(this._effectMenu);
-
-        this._effectItems = {};
-        ['STATIC', 'RAINBOW', 'BREATHE', 'FLOW'].forEach(Lang.bind(this, function (name) {
-            let item = new PopupMenu.PopupMenuItem(EFFECT_LABELS[name]);
-            item.connect('activate', Lang.bind(this, function () {
-                this._setEffect(name);
-            }));
-            this._effectItems[name] = item;
-            this._effectMenu.menu.addMenuItem(item);
-        }));
+        this._effectRow = new SegmentedRow([
+            { key: 'STATIC', label: EFFECT_LABELS.STATIC },
+            { key: 'RAINBOW', label: EFFECT_LABELS.RAINBOW },
+            { key: 'BREATHE', label: EFFECT_LABELS.BREATHE },
+            { key: 'FLOW', label: EFFECT_LABELS.FLOW },
+        ], Lang.bind(this, this._setEffect));
+        this.menu.addMenuItem(this._effectRow);
 
         this._effectSpeedSlider = new LabelledSlider('media-playlist-repeat-symbolic', Lang.bind(this, function (value) {
             this._setEffectSpeed(Math.round(1 + value * 99));
@@ -362,6 +486,15 @@ class VictusApplet extends Applet.TextIconApplet {
         this._effectSpeedSlider.actor.hide();
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        // Housekeeping lives at the bottom, out of the way of the controls.
+        this._graphSwitch = new PopupMenu.PopupSwitchMenuItem('History graphs', true);
+        this._graphSwitch.connect('toggled', Lang.bind(this, function (item, state) {
+            this.showGraphs = state;
+            this.settings.setValue('show-graphs', state);
+            this._applyGraphVisibility();
+        }));
+        this.menu.addMenuItem(this._graphSwitch);
 
         let openItem = new PopupMenu.PopupIconMenuItem('Open Victus Control', 'preferences-system-symbolic', St.IconType.SYMBOLIC);
         openItem.connect('activate', function () {
@@ -523,33 +656,34 @@ class VictusApplet extends Applet.TextIconApplet {
             // Reset first: a re-probe after a backend restart may be relaxing
             // restrictions, not adding them.
             this._fanNoteItem.actor.hide();
-            this._fanModeMenu.actor.show();
-            this._fanModeItems['MANUAL'].actor.show();
-            this._fanModeItems['BETTER_AUTO'].actor.show();
+            this._fanCaption.actor.show();
+            this._fanModeRow.actor.show();
+            this._fanModeRow.setOptionVisible('MANUAL', true);
+            this._fanModeRow.setOptionVisible('BETTER_AUTO', true);
 
             if (this._fanSupport === 'DISABLED') {
-                this._fanModeMenu.actor.hide();
+                this._fanCaption.actor.hide();
+                this._fanModeRow.actor.hide();
                 this._fanSpeedSlider.actor.hide();
-                this._fanNoteItem.label.text = 'Fan control disabled; fans left to the firmware';
+                this._fanNoteItem.label.text = 'Fan control is off; the firmware runs the fans';
                 this._fanNoteItem.actor.show();
             } else if (this._fanSupport === 'UNSUPPORTED') {
-                this._fanModeItems['MANUAL'].actor.hide();
-                this._fanModeItems['BETTER_AUTO'].actor.hide();
+                // Nothing to explain in the menu: the two profiles this board
+                // cannot run are simply not offered.
+                this._fanModeRow.setOptionVisible('MANUAL', false);
+                this._fanModeRow.setOptionVisible('BETTER_AUTO', false);
                 this._fanSpeedSlider.actor.hide();
-                this._fanNoteItem.label.text = 'This board has no fan speed targets';
-                this._fanNoteItem.actor.show();
             }
 
             // FLOW needs zones for the colour to travel across.
-            if (this._keyboardZones !== 'FOUR_ZONE')
-                this._effectItems['FLOW'].actor.hide();
+            this._effectRow.setOptionVisible('FLOW', this._keyboardZones === 'FOUR_ZONE');
 
             // NONE: the board has no keyboard backlight, so there is nothing
             // for the lighting controls to drive.
             let hasBacklight = this._keyboardZones !== 'NONE';
             this._kbdSwitch.actor.visible = hasBacklight;
             this._kbdSlider.actor.visible = hasBacklight;
-            this._effectMenu.actor.visible = hasBacklight;
+            this._effectRow.actor.visible = hasBacklight;
             if (!hasBacklight)
                 this._effectSpeedSlider.actor.hide();
 
@@ -633,7 +767,11 @@ class VictusApplet extends Applet.TextIconApplet {
 
     _reportFailure(e) {
         global.logError(UUID + ': ' + e);
-        this._statusItem.label.text = 'victus-backend unavailable';
+        this._statusItem.label.text = 'victus-backend is not running';
+        this._statusItem.actor.show();
+        ['cpu', 'gpu', 'fan1', 'fan2'].forEach(Lang.bind(this, function (key) {
+            this._stats.set(key, '--');
+        }));
         this.set_applet_label('');
         this.set_applet_tooltip('Victus Control - backend not running');
     }
@@ -641,10 +779,7 @@ class VictusApplet extends Applet.TextIconApplet {
     // ---- refresh ------------------------------------------------------------
 
     _updateFanControls() {
-        for (let mode in this._fanModeItems)
-            this._fanModeItems[mode].setShowDot(mode === this._fanMode);
-
-        this._fanModeMenu.label.text = 'Fan mode: ' + (FAN_MODE_LABELS[this._fanMode] || this._fanMode);
+        this._fanModeRow.setSelected(this._fanMode);
 
         // The speed slider only means anything in MANUAL, and only where the
         // firmware honours targets at all.
@@ -655,10 +790,7 @@ class VictusApplet extends Applet.TextIconApplet {
     }
 
     _updateEffectControls() {
-        for (let name in this._effectItems)
-            this._effectItems[name].setShowDot(name === this._effect);
-
-        this._effectMenu.label.text = 'Lighting: ' + (EFFECT_LABELS[this._effect] || this._effect);
+        this._effectRow.setSelected(this._effect);
 
         if (this._effect === 'STATIC' || this._keyboardZones === 'NONE')
             this._effectSpeedSlider.actor.hide();
@@ -705,15 +837,20 @@ class VictusApplet extends Applet.TextIconApplet {
             else
                 this.set_applet_label('');
 
-            this.set_applet_tooltip('Victus Control  —  fan ' +
-                (isNaN(fan1) ? '?' : fan1) + ' RPM, CPU ' + (isNaN(cpu) ? '?' : cpu) + '°C');
+            this.set_applet_tooltip('Victus Control\n' +
+                'Fans: ' + (FAN_MODE_LABELS[this._fanMode] || this._fanMode) +
+                (isNaN(fan1) ? '' : '  ·  ' + fan1 + ' RPM') +
+                (isNaN(cpu) ? '' : '\nCPU: ' + cpu + '°C'));
 
             // Menu contents are only worth updating while it is on screen.
             if (this._menuOpen) {
-                this._statusItem.label.text = 'Fan 1: ' + (isNaN(fan1) ? '--' : fan1) +
-                    ' RPM     Fan 2: ' + (isNaN(fan2) ? '--' : fan2) + ' RPM';
-                this._tempItem.label.text = 'CPU: ' + (isNaN(cpu) ? '--' : cpu) +
-                    '°C     GPU: ' + (isNaN(gpu) ? '--' : gpu) + '°C';
+                this._statusItem.actor.hide();
+                this._stats.set('cpu', isNaN(cpu) ? '--' : cpu + '°', cpu);
+                // No number from the dGPU means it is asleep, which is worth
+                // saying rather than showing a blank.
+                this._stats.set('gpu', isNaN(gpu) ? 'idle' : gpu + '°', gpu);
+                this._stats.set('fan1', isNaN(fan1) ? '--' : String(fan1));
+                this._stats.set('fan2', isNaN(fan2) ? '--' : String(fan2));
 
                 if (!isNaN(brightness)) {
                     this._kbdSlider.setValueSilently(brightness / 255);

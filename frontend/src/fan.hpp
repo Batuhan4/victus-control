@@ -23,13 +23,18 @@ public:
 	GtkWidget *get_page();
 
 private:
-    // New UI Widgets
-    GtkWidget *mode_selector;
+    // Cooling profile: one segmented control, so every profile is visible and
+    // one click away, with a line under it saying what the active one does.
+    GtkWidget *mode_segments;
+    GtkWidget *mode_buttons[4] = {nullptr, nullptr, nullptr, nullptr};
+    GtkWidget *mode_description;
     GtkWidget *speed_slider;
     GtkWidget *slider_label;
 
-    // Labels for displaying current state
-	GtkWidget *state_label;
+    // The profile the backend last reported, and a guard so reflecting it in
+    // the buttons is not mistaken for the user picking it.
+    std::string current_mode;
+    bool syncing_mode_buttons = false;
 
 	// Analog dials, drawn in gauges.cpp, with the digital value under each.
 	GtkWidget *fan1_gauge;
@@ -90,7 +95,8 @@ private:
     void set_fan_rpm(int level);
 
     // Signal handlers
-	static void on_mode_changed(GtkComboBox *widget, gpointer data);
+	static void on_mode_toggled(GtkToggleButton *button, gpointer data);
+	static char *format_speed_level(GtkScale *scale, double value, gpointer data);
 	static void on_speed_slider_changed(GtkRange *range, gpointer data);
 	static gboolean on_gauge_tick(gpointer data);
 	static void on_history_toggled(GObject *sw, GParamSpec *pspec, gpointer data);
