@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 
 void fan_mode_trigger(const std::string mode);
@@ -35,6 +36,22 @@ bool fan_control_disabled_by(const char *value);
 // the backend is not going to run the fans itself, so nothing left behind by
 // a previous run (a pinned manual target, MAX) stays in effect.
 std::string restore_firmware_fan_control();
+
+// The profile remembered across restarts: the mode, plus the pinned speeds
+// when that mode is MANUAL.
+struct SavedFanState {
+    std::string mode;
+    std::optional<int> fan1_rpm;
+    std::optional<int> fan2_rpm;
+};
+// The one-line file format, split out so it can be tested.
+std::string format_fan_state(const SavedFanState &state);
+std::optional<SavedFanState> parse_fan_state(const std::string &text);
+
+// Re-applies the profile the user last chose (saved under $STATE_DIRECTORY).
+// Returns the mode now in effect, or "" when nothing was saved or the saved
+// profile cannot run on this board, in which case the caller picks a default.
+std::string restore_saved_fan_mode();
 
 std::string ensure_better_auto_mode();
 void shutdown_fan_controller();

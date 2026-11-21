@@ -747,6 +747,103 @@ static void stop_better_auto();
 static std::string start_better_auto();
 static void better_auto_worker();
 
+// --- Remembered fan profile --------------------------------------------------
+//
+// The profile the user picked is written to $STATE_DIRECTORY/fan.conf (systemd
+// points that at /var/lib/victus-control) and applied again when the service
+// starts, so a choice such as MAX survives a reboot instead of silently falling
+// back to the default. One line: "<MODE> <fan1 rpm|-> <fan2 rpm|->".
+
+static bool is_known_fan_mode(const std::string &mode)
+{
+    return mode == "AUTO" || mode == "BETTER_AUTO" || mode == "MANUAL" || mode == "MAX";
+}
+
+std::string format_fan_state(const SavedFanState &state)
+{
+    auto field = [](const std::optional<int> &rpm) {
+        return rpm ? std::to_string(*rpm) : std::string("-");
+    };
+    return state.mode + " " + field(state.fan1_rpm) + " " + field(state.fan2_rpm) + "\n";
+}
+
+std::optional<SavedFanState> parse_fan_state(const std::string &text)
+{
+    std::istringstream stream(text);
+    SavedFanState state;
+    if (!(stream >> state.mode) || !is_known_fan_mode(state.mode)) {
+        return std::nullopt;
+    }
+
+    // The speeds are optional, and a damaged one only costs that speed: the
+    // mode is the part worth keeping.
+    auto read_rpm = [&stream](std::optional<int> &out) {
+        std::string token;
+        int rpm = 0;
+        if ((stream >> token) && parse_strict_int(token, &rpm) && rpm > 0) {
+            out = rpm;
+        }
+    };
+    read_rpm(state.fan1_rpm);
+    read_rpm(state.fan2_rpm);
+    return state;
+}
+
+static std::string fan_state_file_path()
+{
+    const char *dir = std::getenv("STATE_DIRECTORY");
+    if (dir == nullptr || *dir == '\0') {
+        return "";
+    }
+    return std::string(dir) + "/fan.conf";
+}
+
+static void save_fan_state()
+{
+    std::string path = fan_state_file_path();
+    if (path.empty()) {
+        return;
+    }
+
+    SavedFanState state;
+    {
+        std::lock_guard<std::mutex> lock(mode_mutex);
+        state.mode = requested_mode;
+    }
+    if (state.mode == "MANUAL") {
+        std::lock_guard<std::mutex> lock(fan_state_mutex);
+        int rpm = 0;
+        if (last_fan1_speed && parse_strict_int(*last_fan1_speed, &rpm)) state.fan1_rpm = rpm;
+        if (last_fan2_speed && parse_strict_int(*last_fan2_speed, &rpm)) state.fan2_rpm = rpm;
+    }
+
+    // Write beside the file and rename over it, so a power cut mid-write
+    // leaves the previous profile intact rather than an empty file.
+    static std::mutex save_mutex;
+    std::lock_guard<std::mutex> lock(save_mutex);
+    std::string tmp_path = path + ".tmp";
+    {
+        std::ofstream file(tmp_path, std::ios::trunc);
+        if (!file) {
+            std::cerr << "Could not save the fan profile to " << tmp_path << ": "
+                      << strerror(errno) << std::endl;
+            return;
+        }
+        file << format_fan_state(state);
+        file.flush();
+        if (!file) {
+            std::remove(tmp_path.c_str());
+            return;
+        }
+    }
+    if (std::rename(tmp_path.c_str(), path.c_str()) != 0) {
+        std::cerr << "Could not save the fan profile to " << path << ": "
+                  << strerror(errno) << std::endl;
+        std::remove(tmp_path.c_str());
+    }
+}
+
+
 static bool encode_pwm_mode(const std::string &mode, std::string &encoded)
 {
 	if (mode == "AUTO") {
@@ -1162,7 +1259,9 @@ std::string get_fan_mode()
 	}
 }
 
-std::string set_fan_mode(const std::string &mode)
+// Switches profile. `persist` is false for the modes the service picks for
+// itself at start-up, which must not overwrite what the user last chose.
+static std::string apply_fan_mode(const std::string &mode, bool persist)
 {
     if (fan_control_disabled()) {
         return kFanControlDisabledError;
@@ -1184,8 +1283,13 @@ std::string set_fan_mode(const std::string &mode)
     if (mode == "BETTER_AUTO") {
         auto result = start_better_auto();
         if (result == "OK") {
-            std::lock_guard<std::mutex> lock(mode_mutex);
-            requested_mode = "BETTER_AUTO";
+            {
+                std::lock_guard<std::mutex> lock(mode_mutex);
+                requested_mode = "BETTER_AUTO";
+            }
+            if (persist) {
+                save_fan_state();
+            }
         }
         return result;
     }
@@ -1194,15 +1298,74 @@ std::string set_fan_mode(const std::string &mode)
 
     auto result = write_hw_fan_mode(mode);
     if (result == "OK") {
-        std::lock_guard<std::mutex> lock(mode_mutex);
-        requested_mode = mode;
-        if (entering_manual) {
-            std::lock_guard<std::mutex> speed_lock(fan_state_mutex);
-            last_fan1_speed.reset();
-            last_fan2_speed.reset();
+        {
+            std::lock_guard<std::mutex> lock(mode_mutex);
+            requested_mode = mode;
+            if (entering_manual) {
+                std::lock_guard<std::mutex> speed_lock(fan_state_mutex);
+                last_fan1_speed.reset();
+                last_fan2_speed.reset();
+            }
+        }
+        if (persist) {
+            save_fan_state();
         }
     }
     return result;
+}
+
+std::string set_fan_mode(const std::string &mode)
+{
+    return apply_fan_mode(mode, true);
+}
+
+std::string restore_saved_fan_mode()
+{
+    std::string path = fan_state_file_path();
+    if (path.empty() || fan_control_disabled()) {
+        return "";
+    }
+
+    std::ifstream file(path);
+    if (!file) {
+        return "";
+    }
+    std::string line;
+    std::getline(file, line);
+    auto saved = parse_fan_state(line);
+    if (!saved) {
+        std::cerr << "Ignoring unreadable fan profile in " << path << std::endl;
+        return "";
+    }
+
+    const std::string &mode = saved->mode;
+    if ((mode == "MANUAL" || mode == "BETTER_AUTO") && !fan_targets_supported()) {
+        std::cerr << "Saved fan profile " << mode
+                  << " needs fan speed targets this board does not expose; ignoring it." << std::endl;
+        return "";
+    }
+    // MANUAL with no speed on record would switch the firmware curve off and
+    // then pin nothing, leaving the fans wherever they happened to be.
+    if (mode == "MANUAL" && !saved->fan1_rpm && !saved->fan2_rpm) {
+        return "";
+    }
+
+    auto result = apply_fan_mode(mode, false);
+    if (result != "OK") {
+        std::cerr << "Could not restore saved fan profile " << mode << ": " << result << std::endl;
+        return "";
+    }
+
+    if (mode == "MANUAL") {
+        // Seeded after the switch, which clears the cache on entering MANUAL.
+        // The watchdog started below writes them out on its first pass.
+        std::lock_guard<std::mutex> lock(fan_state_mutex);
+        if (saved->fan1_rpm) last_fan1_speed = std::to_string(*saved->fan1_rpm);
+        if (saved->fan2_rpm) last_fan2_speed = std::to_string(*saved->fan2_rpm);
+    }
+
+    fan_mode_trigger(mode);
+    return mode;
 }
 
 std::string get_fan_target_support()
@@ -1245,7 +1408,7 @@ std::string ensure_better_auto_mode()
     }
 
     std::cout << "Enforcing BETTER_AUTO mode" << std::endl;
-    auto result = set_fan_mode("BETTER_AUTO");
+    auto result = apply_fan_mode("BETTER_AUTO", false);
     if (result == "OK") {
         fan_mode_trigger("BETTER_AUTO");
     }
@@ -1431,6 +1594,9 @@ std::string set_fan_speed(const std::string &fan_num, const std::string &speed, 
 
     if (result == 0)
     {
+        if (update_cache) {
+            save_fan_state();
+        }
         // Only trigger fan_mode_trigger if requested and not already reapplying
         if (trigger_mode && !is_reapplying.load(std::memory_order_acquire) && get_fan_mode() == "MANUAL") {
             fan_mode_trigger("MANUAL");

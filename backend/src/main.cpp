@@ -374,7 +374,8 @@ int main() {
 
   std::cout << "Server is listening..." << std::endl;
 
-  // The fans are left to the firmware in two cases. VICTUS_NO_FAN_CONTROL=1
+  // Unless the user saved a profile (restored first, see below), the fans
+  // are left to the firmware in two cases. VICTUS_NO_FAN_CONTROL=1
   // is for boards whose BIOS reports software fan support but ignores the RPM
   // targets: there the Better Auto loop would switch the fans to MANUAL and
   // then have no way to steer them. The other case is a board that exposes no
@@ -392,6 +393,11 @@ int main() {
       std::cerr << "Failed to hand the fans back to the firmware: " << result
                 << std::endl;
     }
+  } else if (std::string restored = restore_saved_fan_mode();
+             !restored.empty()) {
+    // The profile the user last picked wins over both defaults below, so a
+    // choice such as MAX is still in effect after a reboot.
+    std::cout << "Restored saved fan profile: " << restored << std::endl;
   } else if (get_fan_target_support() != "SUPPORTED") {
     std::cout << "This board exposes no fan speed targets; leaving the fans "
                  "to the firmware (AUTO and MAX remain available)."
