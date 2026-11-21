@@ -2,6 +2,7 @@
 #define FAN_HPP
 
 #include <gtk/gtk.h>
+#include <optional>
 #include <atomic>
 #include <string>
 #include <vector>
@@ -35,6 +36,8 @@ private:
     // the buttons is not mistaken for the user picking it.
     std::string current_mode;
     bool syncing_mode_buttons = false;
+    bool syncing_speed = false;
+    std::optional<int> displayed_manual_target;
 
 	// Analog dials, drawn in gauges.cpp, with the digital value under each.
 	GtkWidget *fan1_gauge;

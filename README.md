@@ -218,7 +218,7 @@ Everything lives on one page, with a card per subsystem.
 - *Manual* shows a speed slider that maps positions to calibrated RPM steps; fan 2 honours the 10 s offset automatically.
 - *Max* runs both fans flat out, and is tinted amber while active so it never passes for the resting state.
 
-**The profile you pick is remembered.** The backend saves it (and the manual speed, in `Manual`) to `/var/lib/victus-control/fan.conf` and applies it again when the service starts, so `Max` is still `Max` after a reboot. It does not matter whether the choice was made in the app, the panel applet or the GNOME extension.
+**The profile you pick is remembered.** The backend saves it (and the manual speed, in `Manual`) to `/var/lib/victus-control/fan.conf` and applies it again when the service starts, so `Max` is still `Max` after a reboot. It does not matter whether the choice was made in the app, the panel applet or the GNOME extension. A Manual profile is saved once both fan speeds have been applied successfully. If either target cannot be restored at startup, the firmware curve takes over.
 
 Fan speed and temperature are shown as analog dials with the digital value under each. The rotor blades turn at a rate derived from the measured RPM, and a stopped fan renders grey rather than merely still. Thermometers and readouts shift cyan → amber → red, crossing at 70 °C and 85 °C.
 

@@ -3,13 +3,13 @@
 #include <optional>
 #include <string>
 
-void fan_mode_trigger(const std::string mode);
 std::string set_fan_mode(const std::string &value);
 std::string get_fan_mode();
 
 std::string get_fan_speed(const std::string &fan_num);
 std::string get_fan_max_speed(const std::string &fan_num);
-std::string set_fan_speed(const std::string &fan_num, const std::string &speed, bool trigger_mode = true, bool update_cache = true);
+std::string set_fan_speed(const std::string &fan_num, const std::string &speed);
+std::string get_manual_fan_target();
 std::string get_cpu_temperature();
 std::string get_gpu_temperature();
 std::string get_gpu_usage();
@@ -49,9 +49,9 @@ std::string format_fan_state(const SavedFanState &state);
 std::optional<SavedFanState> parse_fan_state(const std::string &text);
 
 // Re-applies the profile the user last chose (saved under $STATE_DIRECTORY).
-// Returns the mode now in effect, or "" when nothing was saved or the saved
-// profile cannot run on this board, in which case the caller picks a default.
-std::string restore_saved_fan_mode();
+// Returns true if a saved profile was applied or firmware AUTO was chosen
+// after a failed MANUAL restore. Otherwise the caller picks a default.
+bool restore_saved_fan_mode();
 
 std::string ensure_better_auto_mode();
 void shutdown_fan_controller();

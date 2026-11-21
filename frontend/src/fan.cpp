@@ -5,6 +5,7 @@
 #include <string>
 #include <thread>
 #include <chrono>
+#include <charconv>
 #include <fstream>
 #include <cstdlib>
 #include <sys/stat.h>
@@ -378,6 +379,9 @@ void VictusFanControl::update_ui_from_system_state()
         std::cerr << "Failed to get fan mode, defaulting to AUTO." << std::endl;
     }
 
+    if (current_mode == "MANUAL" && fan_mode != "MANUAL") {
+        manual_request_generation.fetch_add(1, std::memory_order_acq_rel);
+    }
     current_mode = fan_mode;
 
     const FanModeInfo *active = nullptr;
@@ -395,6 +399,22 @@ void VictusFanControl::update_ui_from_system_state()
     if (active && gtk_widget_get_sensitive(mode_segments))
         description += kModeRememberedHint;
     gtk_label_set_text(GTK_LABEL(mode_description), description.c_str());
+
+    displayed_manual_target.reset();
+    if (fan_targets_supported && fan_mode == "MANUAL") {
+        std::string target = socket_client->send_command_async(GET_MANUAL_FAN_TARGET).get();
+        int rpm = 0;
+        auto [end, error] = std::from_chars(target.data(), target.data() + target.size(), rpm);
+        if (error == std::errc{} && end == target.data() + target.size() && rpm >= 0) {
+            displayed_manual_target = rpm;
+            const double step = static_cast<double>(FAN1_MAX_RPM - MIN_RPM) / (RPM_STEPS - 1);
+            int level = static_cast<int>(std::round((rpm - MIN_RPM) / step)) + 1;
+            syncing_speed = true;
+            gtk_range_set_value(GTK_RANGE(speed_slider), std::clamp(level, 1, RPM_STEPS));
+            syncing_speed = false;
+        }
+    }
+    gtk_scale_set_format_value_func(GTK_SCALE(speed_slider), format_speed_level, this, nullptr);
 
     // The slider only does anything in MANUAL, so it is only there in MANUAL.
     gtk_widget_set_visible(manual_speed_box,
@@ -611,17 +631,23 @@ void VictusFanControl::on_mode_toggled(GtkToggleButton *button, gpointer data)
 void VictusFanControl::on_speed_slider_changed(GtkRange *range, gpointer data)
 {
     VictusFanControl *self = static_cast<VictusFanControl*>(data);
-    if (self->current_mode != "MANUAL") {
+    if (self->syncing_speed || self->current_mode != "MANUAL") {
         return;
     }
 
+    self->displayed_manual_target.reset();
+    gtk_scale_set_format_value_func(GTK_SCALE(range), format_speed_level, self, nullptr);
     int level = static_cast<int>(gtk_range_get_value(range));
     self->set_fan_rpm(level);
 }
 
 // Shows the speed the level stands for, since "5" alone means nothing.
-char *VictusFanControl::format_speed_level(GtkScale *, double value, gpointer)
+char *VictusFanControl::format_speed_level(GtkScale *scale, double value, gpointer data)
 {
+    auto *self = static_cast<VictusFanControl *>(data);
+    if (self->displayed_manual_target && value == gtk_range_get_value(GTK_RANGE(scale))) {
+        return g_strdup_printf("%d RPM", *self->displayed_manual_target);
+    }
     int level = std::clamp(static_cast<int>(std::lround(value)), 1, RPM_STEPS);
     return g_strdup_printf("%d RPM", rpm_for_level(level, FAN1_MAX_RPM));
 }

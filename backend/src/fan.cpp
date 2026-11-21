@@ -28,11 +28,10 @@
 #include "validation.hpp"
 
 static std::atomic<int> fan_thread_generation(0);
-static std::atomic<bool> is_reapplying(false);
 static std::mutex fan_state_mutex;
-static std::optional<std::string> last_fan1_speed;
-static std::optional<std::string> last_fan2_speed;
-static std::mutex mode_mutex;
+static std::optional<int> last_fan1_speed;
+static std::optional<int> last_fan2_speed;
+static std::mutex mode_change_mutex;
 static std::string requested_mode = "AUTO";
 static std::atomic<bool> fan_mode_requires_root(false);
 
@@ -74,6 +73,7 @@ static constexpr std::chrono::seconds kBetterAutoReapply{90};
 static constexpr int kBetterAutoCooldownLevel = 5;
 static constexpr std::chrono::seconds kBetterAutoCooldown{90};
 static constexpr std::chrono::seconds kFanApplyGap{10};
+static constexpr std::chrono::seconds kFanWatchdogInterval{90};
 static constexpr const char *kSudoPath = "/usr/bin/sudo";
 static constexpr const char *kFanModeHelperPath = "/usr/bin/set-fan-mode.sh";
 static constexpr const char *kFanSpeedHelperPath = "/usr/bin/set-fan-speed.sh";
@@ -747,6 +747,10 @@ static void stop_better_auto();
 static std::string start_better_auto();
 static void better_auto_worker();
 
+enum class FanSpeedSource { Client, BetterAuto, Watchdog, Restore };
+static std::string apply_fan_speed(const std::string &fan_num, const std::string &speed,
+                                   FanSpeedSource source, int generation = 0);
+
 // --- Remembered fan profile --------------------------------------------------
 //
 // The profile the user picked is written to $STATE_DIRECTORY/fan.conf (systemd
@@ -780,7 +784,7 @@ std::optional<SavedFanState> parse_fan_state(const std::string &text)
     auto read_rpm = [&stream](std::optional<int> &out) {
         std::string token;
         int rpm = 0;
-        if ((stream >> token) && parse_strict_int(token, &rpm) && rpm > 0) {
+        if ((stream >> token) && parse_strict_int(token, &rpm) && rpm >= 0) {
             out = rpm;
         }
     };
@@ -798,6 +802,7 @@ static std::string fan_state_file_path()
     return std::string(dir) + "/fan.conf";
 }
 
+// Called with fan_apply_mutex held while the applied profile is stable.
 static void save_fan_state()
 {
     std::string path = fan_state_file_path();
@@ -807,20 +812,18 @@ static void save_fan_state()
 
     SavedFanState state;
     {
-        std::lock_guard<std::mutex> lock(mode_mutex);
-        state.mode = requested_mode;
-    }
-    if (state.mode == "MANUAL") {
         std::lock_guard<std::mutex> lock(fan_state_mutex);
-        int rpm = 0;
-        if (last_fan1_speed && parse_strict_int(*last_fan1_speed, &rpm)) state.fan1_rpm = rpm;
-        if (last_fan2_speed && parse_strict_int(*last_fan2_speed, &rpm)) state.fan2_rpm = rpm;
+        state.mode = requested_mode;
+        if (state.mode == "MANUAL") {
+            if (!last_fan1_speed || !last_fan2_speed) {
+                return;
+            }
+            state.fan1_rpm = last_fan1_speed;
+            state.fan2_rpm = last_fan2_speed;
+        }
     }
 
-    // Write beside the file and rename over it, so a power cut mid-write
-    // leaves the previous profile intact rather than an empty file.
-    static std::mutex save_mutex;
-    std::lock_guard<std::mutex> lock(save_mutex);
+    // Replace the previous profile atomically once the complete line is written.
     std::string tmp_path = path + ".tmp";
     {
         std::ofstream file(tmp_path, std::ios::trunc);
@@ -830,8 +833,9 @@ static void save_fan_state()
             return;
         }
         file << format_fan_state(state);
-        file.flush();
+        file.close();
         if (!file) {
+            std::cerr << "Could not finish saving fan profile to " << tmp_path << std::endl;
             std::remove(tmp_path.c_str());
             return;
         }
@@ -1044,7 +1048,7 @@ static void better_auto_worker()
             std::string rpm_str_fan1 = std::to_string(rpms[0]);
             std::string rpm_str_fan2 = std::to_string(rpms[1]);
 
-            auto result1 = set_fan_speed("1", rpm_str_fan1, false, true);
+            auto result1 = apply_fan_speed("1", rpm_str_fan1, FanSpeedSource::BetterAuto);
             if (result1 != "OK") {
                 std::cerr << "better-auto: failed to set fan 1 speed: " << result1 << std::endl;
             }
@@ -1061,7 +1065,7 @@ static void better_auto_worker()
                 break;
             }
 
-            auto result2 = set_fan_speed("2", rpm_str_fan2, false, true);
+            auto result2 = apply_fan_speed("2", rpm_str_fan2, FanSpeedSource::BetterAuto);
             if (result2 != "OK") {
                 std::cerr << "better-auto: failed to set fan 2 speed: " << result2 << std::endl;
             }
@@ -1108,8 +1112,6 @@ static void stop_better_auto()
 
 static std::string start_better_auto()
 {
-    stop_better_auto();
-
     auto result = write_hw_fan_mode("MANUAL");
     if (result != "OK") {
         return result;
@@ -1136,78 +1138,57 @@ static std::string start_better_auto()
     return "OK";
 }
 
-// Function to reapply fan settings without triggering fan_mode_trigger
-void reapply_fan_settings() {
-    bool expected = false;
-    if (!is_reapplying.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
-        return; // Another reapply loop is already running
-    }
-
-    std::optional<std::string> fan1_speed;
-    std::optional<std::string> fan2_speed;
+static void reapply_fan_settings(int generation)
+{
+    std::optional<int> fan1_speed;
+    std::optional<int> fan2_speed;
     {
         std::lock_guard<std::mutex> lock(fan_state_mutex);
         fan1_speed = last_fan1_speed;
         fan2_speed = last_fan2_speed;
     }
 
-    std::string current_mode = get_fan_mode();
-    if (current_mode == "MANUAL" && (fan1_speed || fan2_speed)) {
-        std::ostringstream log_message;
-        log_message << "Re-applying manual fan settings";
-        bool has_detail = false;
-
-        if (fan1_speed) {
-            log_message << (has_detail ? ", " : ": ") << "fan1=" << *fan1_speed;
-            has_detail = true;
-        }
-        if (fan2_speed) {
-            log_message << (has_detail ? ", " : ": ") << "fan2=" << *fan2_speed;
-        }
-
-        std::cout << log_message.str() << std::endl;
-
-        if (fan1_speed) {
-            auto result = set_fan_speed("1", *fan1_speed, false, false);
-            if (result != "OK") {
-                std::cerr << "Failed to reapply fan 1 speed: " << result << std::endl;
-            }
-        }
-
-        if (fan2_speed) {
-            auto result = set_fan_speed("2", *fan2_speed, false, false);
-            if (result != "OK") {
-                std::cerr << "Failed to reapply fan 2 speed: " << result << std::endl;
-            }
+    if (fan1_speed) {
+        auto result = apply_fan_speed("1", std::to_string(*fan1_speed),
+                                      FanSpeedSource::Watchdog, generation);
+        if (result != "OK") {
+            std::cerr << "Failed to reapply fan 1 speed: " << result << std::endl;
         }
     }
-
-    is_reapplying.store(false, std::memory_order_release);
+    if (fan2_speed) {
+        auto result = apply_fan_speed("2", std::to_string(*fan2_speed),
+                                      FanSpeedSource::Watchdog, generation);
+        if (result != "OK") {
+            std::cerr << "Failed to reapply fan 2 speed: " << result << std::endl;
+        }
+    }
 }
 
-// call set_fan_mode every 90 seconds so that the mode doesn't revert back (weird hp behaviour)
-// also re-applies manual fan speed
-void fan_mode_trigger(const std::string mode) {
-    fan_thread_generation++;
-	if (mode == "AUTO" || mode == "BETTER_AUTO") return;
+// The firmware can revert a manually selected mode after 90 seconds.
+static void start_fan_watchdog(const std::string &mode)
+{
+    int generation = ++fan_thread_generation;
+    if (mode == "AUTO" || mode == "BETTER_AUTO") {
+        return;
+    }
 
-    std::thread([mode, gen = fan_thread_generation.load()]() {
-        while (fan_thread_generation == gen) {
-            // Reapply the fan mode directly via hwmon
-            auto result = write_hw_fan_mode(mode);
-            if (result != "OK") {
-                std::cerr << "fan_mode_trigger: failed to assert mode " << mode << ": " << result << std::endl;
-            }
-
-            // Reapply fan settings if in manual mode
-            if (mode == "MANUAL") {
-                reapply_fan_settings();
-            }
-
-            // Wait for the interval (90 seconds)
-            for (int i = 0; i < 90; ++i) {
-                if (fan_thread_generation != gen) return;
+    std::thread([mode, generation]() {
+        while (fan_thread_generation == generation) {
+            for (int i = 0; i < kFanWatchdogInterval.count(); ++i) {
+                if (fan_thread_generation != generation) return;
                 std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(fan_apply_mutex);
+                if (fan_thread_generation != generation) return;
+                auto result = write_hw_fan_mode(mode);
+                if (result != "OK") {
+                    std::cerr << "Fan watchdog could not assert " << mode << ": " << result << std::endl;
+                }
+            }
+            if (mode == "MANUAL") {
+                reapply_fan_settings(generation);
             }
         }
     }).detach();
@@ -1216,7 +1197,7 @@ void fan_mode_trigger(const std::string mode) {
 std::string get_fan_mode()
 {
 	{
-		std::lock_guard<std::mutex> lock(mode_mutex);
+		std::lock_guard<std::mutex> lock(fan_state_mutex);
 		if (requested_mode == "BETTER_AUTO") {
 			return requested_mode;
 		}
@@ -1273,42 +1254,26 @@ static std::string apply_fan_mode(const std::string &mode, bool persist)
         return kFanTargetsUnsupportedError;
     }
 
-    std::string previous_mode;
-    {
-        std::lock_guard<std::mutex> lock(mode_mutex);
-        previous_mode = requested_mode;
+    if (!is_known_fan_mode(mode)) {
+        return "ERROR: Invalid fan mode: " + mode;
     }
-    bool entering_manual = (mode == "MANUAL" && previous_mode != "MANUAL");
-
-    if (mode == "BETTER_AUTO") {
-        auto result = start_better_auto();
-        if (result == "OK") {
-            {
-                std::lock_guard<std::mutex> lock(mode_mutex);
-                requested_mode = "BETTER_AUTO";
-            }
-            if (persist) {
-                save_fan_state();
-            }
-        }
-        return result;
-    }
-
+    std::lock_guard<std::mutex> change_lock(mode_change_mutex);
     stop_better_auto();
+    std::lock_guard<std::mutex> apply_lock(fan_apply_mutex);
 
-    auto result = write_hw_fan_mode(mode);
+    auto result = mode == "BETTER_AUTO" ? start_better_auto() : write_hw_fan_mode(mode);
     if (result == "OK") {
         {
-            std::lock_guard<std::mutex> lock(mode_mutex);
-            requested_mode = mode;
-            if (entering_manual) {
-                std::lock_guard<std::mutex> speed_lock(fan_state_mutex);
+            std::lock_guard<std::mutex> lock(fan_state_mutex);
+            if (mode != requested_mode) {
                 last_fan1_speed.reset();
                 last_fan2_speed.reset();
             }
+            requested_mode = mode;
         }
         if (persist) {
             save_fan_state();
+            start_fan_watchdog(mode);
         }
     }
     return result;
@@ -1319,53 +1284,66 @@ std::string set_fan_mode(const std::string &mode)
     return apply_fan_mode(mode, true);
 }
 
-std::string restore_saved_fan_mode()
+static bool fall_back_to_firmware()
+{
+    auto result = restore_firmware_fan_control();
+    if (result != "OK") {
+        std::cerr << "Could not hand fans back to firmware: " << result << std::endl;
+        return false;
+    }
+    return true;
+}
+
+bool restore_saved_fan_mode()
 {
     std::string path = fan_state_file_path();
     if (path.empty() || fan_control_disabled()) {
-        return "";
+        return false;
     }
 
     std::ifstream file(path);
     if (!file) {
-        return "";
+        return false;
     }
     std::string line;
     std::getline(file, line);
     auto saved = parse_fan_state(line);
     if (!saved) {
         std::cerr << "Ignoring unreadable fan profile in " << path << std::endl;
-        return "";
+        return false;
     }
 
     const std::string &mode = saved->mode;
     if ((mode == "MANUAL" || mode == "BETTER_AUTO") && !fan_targets_supported()) {
         std::cerr << "Saved fan profile " << mode
                   << " needs fan speed targets this board does not expose; ignoring it." << std::endl;
-        return "";
+        return false;
     }
-    // MANUAL with no speed on record would switch the firmware curve off and
-    // then pin nothing, leaving the fans wherever they happened to be.
-    if (mode == "MANUAL" && !saved->fan1_rpm && !saved->fan2_rpm) {
-        return "";
+    if (mode == "MANUAL" && (!saved->fan1_rpm || !saved->fan2_rpm)) {
+        std::cerr << "Ignoring incomplete saved MANUAL profile; using firmware AUTO." << std::endl;
+        return fall_back_to_firmware();
     }
 
     auto result = apply_fan_mode(mode, false);
     if (result != "OK") {
         std::cerr << "Could not restore saved fan profile " << mode << ": " << result << std::endl;
-        return "";
+        return mode == "MANUAL" && fall_back_to_firmware();
     }
 
     if (mode == "MANUAL") {
-        // Seeded after the switch, which clears the cache on entering MANUAL.
-        // The watchdog started below writes them out on its first pass.
-        std::lock_guard<std::mutex> lock(fan_state_mutex);
-        if (saved->fan1_rpm) last_fan1_speed = std::to_string(*saved->fan1_rpm);
-        if (saved->fan2_rpm) last_fan2_speed = std::to_string(*saved->fan2_rpm);
+        result = apply_fan_speed("1", std::to_string(*saved->fan1_rpm), FanSpeedSource::Restore);
+        if (result == "OK") {
+            result = apply_fan_speed("2", std::to_string(*saved->fan2_rpm), FanSpeedSource::Restore);
+        }
+        if (result != "OK") {
+            std::cerr << "Could not restore saved MANUAL fan targets: " << result << std::endl;
+            return fall_back_to_firmware();
+        }
     }
 
-    fan_mode_trigger(mode);
-    return mode;
+    start_fan_watchdog(mode);
+    std::cout << "Restored saved fan profile: " << mode << std::endl;
+    return true;
 }
 
 std::string get_fan_target_support()
@@ -1385,8 +1363,10 @@ std::string restore_firmware_fan_control()
 
     auto result = write_hw_fan_mode("AUTO");
     if (result == "OK") {
-        std::lock_guard<std::mutex> lock(mode_mutex);
+        std::lock_guard<std::mutex> lock(fan_state_mutex);
         requested_mode = "AUTO";
+        last_fan1_speed.reset();
+        last_fan2_speed.reset();
     }
     return result;
 }
@@ -1395,7 +1375,7 @@ std::string ensure_better_auto_mode()
 {
     bool needs_force = false;
     {
-        std::lock_guard<std::mutex> lock(mode_mutex);
+        std::lock_guard<std::mutex> lock(fan_state_mutex);
         if (requested_mode != "BETTER_AUTO") {
             needs_force = true;
         } else if (!better_auto_running.load(std::memory_order_acquire)) {
@@ -1408,11 +1388,7 @@ std::string ensure_better_auto_mode()
     }
 
     std::cout << "Enforcing BETTER_AUTO mode" << std::endl;
-    auto result = apply_fan_mode("BETTER_AUTO", false);
-    if (result == "OK") {
-        fan_mode_trigger("BETTER_AUTO");
-    }
-    return result;
+    return apply_fan_mode("BETTER_AUTO", false);
 }
 
 void shutdown_fan_controller()
@@ -1542,7 +1518,8 @@ std::string get_gpu_temperature()
 	return std::to_string(static_cast<int>(std::lround(*gpu_temp)));
 }
 
-std::string set_fan_speed(const std::string &fan_num, const std::string &speed, bool trigger_mode, bool update_cache)
+static std::string apply_fan_speed(const std::string &fan_num, const std::string &speed,
+                                   FanSpeedSource source, int generation)
 {
     if (fan_control_disabled()) {
         return kFanControlDisabledError;
@@ -1566,43 +1543,52 @@ std::string set_fan_speed(const std::string &fan_num, const std::string &speed, 
     if (clamped_speed != parsed_speed) {
         std::cout << "set_fan_speed: clamped fan " << fan_num << " target from " << parsed_speed << " to " << clamped_speed << std::endl;
     }
-    std::string clamped_str = std::to_string(clamped_speed);
-    if (update_cache) {
-        std::lock_guard<std::mutex> lock(fan_state_mutex);
-        if (index == 0) {
-            last_fan1_speed = clamped_str;
-        } else {
-            last_fan2_speed = clamped_str;
-        }
+    if (source == FanSpeedSource::Client) {
+        generation = fan_thread_generation.load();
     }
-
     std::unique_lock<std::mutex> apply_lock(fan_apply_mutex);
-    auto now = std::chrono::steady_clock::now();
-    if (index == 1 && fan_last_apply[0] != std::chrono::steady_clock::time_point::min()) {
-        auto elapsed = now - fan_last_apply[0];
-        if (elapsed < kFanApplyGap) {
-            auto wait_duration = kFanApplyGap - elapsed;
-            apply_lock.unlock();
-            std::this_thread::sleep_for(wait_duration);
-            apply_lock.lock();
+    while (index == 1 && fan_last_apply[0] != std::chrono::steady_clock::time_point::min() &&
+           (source == FanSpeedSource::Restore || source == FanSpeedSource::BetterAuto ||
+            generation == fan_thread_generation)) {
+        auto ready_at = fan_last_apply[0] + kFanApplyGap;
+        if (std::chrono::steady_clock::now() >= ready_at) {
+            break;
+        }
+        apply_lock.unlock();
+        std::this_thread::sleep_until(ready_at);
+        apply_lock.lock();
+    }
+
+    if (source == FanSpeedSource::Client || source == FanSpeedSource::Watchdog) {
+        std::lock_guard<std::mutex> lock(fan_state_mutex);
+        if (requested_mode != "MANUAL" || generation != fan_thread_generation) {
+            return source == FanSpeedSource::Watchdog ? "OK" : "ERROR: Manual fan mode is no longer active";
+        }
+        if (source == FanSpeedSource::Watchdog) {
+            // A client may have changed the target while the watchdog waited.
+            const auto &applied = index == 0 ? last_fan1_speed : last_fan2_speed;
+            if (!applied || *applied != clamped_speed) {
+                return "OK";
+            }
         }
     }
 
-    int result = run_helper_command({kSudoPath, kFanSpeedHelperPath, fan_num, clamped_str});
+    int result = run_helper_command({kSudoPath, kFanSpeedHelperPath, fan_num, std::to_string(clamped_speed)});
     fan_last_apply[index] = std::chrono::steady_clock::now();
-    apply_lock.unlock();
-
-    if (result == 0)
-    {
-        if (update_cache) {
-            save_fan_state();
-        }
-        // Only trigger fan_mode_trigger if requested and not already reapplying
-        if (trigger_mode && !is_reapplying.load(std::memory_order_acquire) && get_fan_mode() == "MANUAL") {
-            fan_mode_trigger("MANUAL");
+    if (result == 0) {
+        if (source == FanSpeedSource::Client || source == FanSpeedSource::Restore) {
+            {
+                std::lock_guard<std::mutex> lock(fan_state_mutex);
+                (index == 0 ? last_fan1_speed : last_fan2_speed) = clamped_speed;
+            }
+            if (source == FanSpeedSource::Client) {
+                save_fan_state();
+            }
         }
         return "OK";
     }
+    apply_lock.unlock();
+
     if (result == -1) {
         std::cerr << "Failed to execute set-fan-speed.sh for fan " << fan_num
                   << ": " << strerror(errno) << std::endl;
@@ -1618,4 +1604,18 @@ std::string set_fan_speed(const std::string &fan_num, const std::string &speed, 
     }
 
     return "ERROR: Failed to set fan speed";
+}
+
+std::string set_fan_speed(const std::string &fan_num, const std::string &speed)
+{
+    return apply_fan_speed(fan_num, speed, FanSpeedSource::Client);
+}
+
+std::string get_manual_fan_target()
+{
+    std::lock_guard<std::mutex> lock(fan_state_mutex);
+    if (requested_mode != "MANUAL" || !last_fan1_speed) {
+        return "ERROR: No active manual target";
+    }
+    return std::to_string(*last_fan1_speed);
 }

@@ -358,7 +358,7 @@ scale highlight {
   border: none;
   border-radius: 999px;
   min-height: 4px;
-  margin: -1px;
+  margin: 0;
 }
 
 scale slider {
