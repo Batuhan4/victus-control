@@ -747,9 +747,13 @@ static void stop_better_auto();
 static std::string start_better_auto();
 static void better_auto_worker();
 
-enum class FanSpeedSource { Client, BetterAuto, Watchdog, Restore };
+// Restore applies fan 1 during startup. RestoreLate applies fan 2 from a
+// background thread once the inter-fan gap has passed, and gives way to
+// anything a client has done in the meantime.
+enum class FanSpeedSource { Client, BetterAuto, Watchdog, Restore, RestoreLate };
 static std::string apply_fan_speed(const std::string &fan_num, const std::string &speed,
                                    FanSpeedSource source, int generation = 0);
+static constexpr const char *kRestoreCancelled = "CANCELLED";
 
 // --- Remembered fan profile --------------------------------------------------
 //
@@ -1165,11 +1169,12 @@ static void reapply_fan_settings(int generation)
 }
 
 // The firmware can revert a manually selected mode after 90 seconds.
-static void start_fan_watchdog(const std::string &mode)
+// Returns the generation that a later mode change will move past.
+static int start_fan_watchdog(const std::string &mode)
 {
     int generation = ++fan_thread_generation;
     if (mode == "AUTO" || mode == "BETTER_AUTO") {
-        return;
+        return generation;
     }
 
     std::thread([mode, generation]() {
@@ -1192,6 +1197,7 @@ static void start_fan_watchdog(const std::string &mode)
             }
         }
     }).detach();
+    return generation;
 }
 
 std::string get_fan_mode()
@@ -1294,6 +1300,34 @@ static bool fall_back_to_firmware()
     return true;
 }
 
+// Second half of a MANUAL restore, run off the startup path. A client that
+// switched mode or set fan 2 itself in the meantime wins: nothing is written
+// over its choice, and no fallback undoes it.
+static void finish_manual_restore(int fan2_rpm, int generation)
+{
+    auto result = apply_fan_speed("2", std::to_string(fan2_rpm),
+                                  FanSpeedSource::RestoreLate, generation);
+    if (result == "OK") {
+        std::cout << "Restored saved fan profile: MANUAL" << std::endl;
+        return;
+    }
+    if (result == kRestoreCancelled) {
+        std::cout << "Saved MANUAL restore superseded by a client" << std::endl;
+        return;
+    }
+
+    std::lock_guard<std::mutex> change_lock(mode_change_mutex);
+    {
+        std::lock_guard<std::mutex> lock(fan_state_mutex);
+        if (fan_thread_generation != generation || requested_mode != "MANUAL" ||
+            last_fan2_speed) {
+            return;
+        }
+    }
+    std::cerr << "Could not restore saved MANUAL fan 2 target: " << result << std::endl;
+    fall_back_to_firmware();
+}
+
 bool restore_saved_fan_mode()
 {
     std::string path = fan_state_file_path();
@@ -1332,13 +1366,19 @@ bool restore_saved_fan_mode()
 
     if (mode == "MANUAL") {
         result = apply_fan_speed("1", std::to_string(*saved->fan1_rpm), FanSpeedSource::Restore);
-        if (result == "OK") {
-            result = apply_fan_speed("2", std::to_string(*saved->fan2_rpm), FanSpeedSource::Restore);
-        }
         if (result != "OK") {
-            std::cerr << "Could not restore saved MANUAL fan targets: " << result << std::endl;
+            std::cerr << "Could not restore saved MANUAL fan 1 target: " << result << std::endl;
             return fall_back_to_firmware();
         }
+
+        // Fan 2 has to wait out the inter-fan gap (10 s). Doing that here
+        // would keep the socket closed, so every client opened at boot would
+        // hang until it passed. Finish it in the background instead.
+        int generation = start_fan_watchdog(mode);
+        std::thread(finish_manual_restore, *saved->fan2_rpm, generation).detach();
+        std::cout << "Restoring saved fan profile: MANUAL (fan 2 follows after the inter-fan gap)"
+                  << std::endl;
+        return true;
     }
 
     start_fan_watchdog(mode);
@@ -1393,6 +1433,9 @@ std::string ensure_better_auto_mode()
 
 void shutdown_fan_controller()
 {
+    // Same lock as a mode change: a background restore that is falling back
+    // to the firmware touches the Better Auto thread too.
+    std::lock_guard<std::mutex> change_lock(mode_change_mutex);
     fan_thread_generation++;
     stop_better_auto();
 }
@@ -1559,10 +1602,18 @@ static std::string apply_fan_speed(const std::string &fan_num, const std::string
         apply_lock.lock();
     }
 
-    if (source == FanSpeedSource::Client || source == FanSpeedSource::Watchdog) {
+    if (source == FanSpeedSource::Client || source == FanSpeedSource::Watchdog ||
+        source == FanSpeedSource::RestoreLate) {
         std::lock_guard<std::mutex> lock(fan_state_mutex);
         if (requested_mode != "MANUAL" || generation != fan_thread_generation) {
-            return source == FanSpeedSource::Watchdog ? "OK" : "ERROR: Manual fan mode is no longer active";
+            if (source == FanSpeedSource::Watchdog) return "OK";
+            if (source == FanSpeedSource::RestoreLate) return kRestoreCancelled;
+            return "ERROR: Manual fan mode is no longer active";
+        }
+        if (source == FanSpeedSource::RestoreLate &&
+            (index == 0 ? last_fan1_speed : last_fan2_speed)) {
+            // A client set this fan while the restore waited; keep its value.
+            return kRestoreCancelled;
         }
         if (source == FanSpeedSource::Watchdog) {
             // A client may have changed the target while the watchdog waited.
@@ -1576,7 +1627,8 @@ static std::string apply_fan_speed(const std::string &fan_num, const std::string
     int result = run_helper_command({kSudoPath, kFanSpeedHelperPath, fan_num, std::to_string(clamped_speed)});
     fan_last_apply[index] = std::chrono::steady_clock::now();
     if (result == 0) {
-        if (source == FanSpeedSource::Client || source == FanSpeedSource::Restore) {
+        if (source == FanSpeedSource::Client || source == FanSpeedSource::Restore ||
+            source == FanSpeedSource::RestoreLate) {
             {
                 std::lock_guard<std::mutex> lock(fan_state_mutex);
                 (index == 0 ? last_fan1_speed : last_fan2_speed) = clamped_speed;

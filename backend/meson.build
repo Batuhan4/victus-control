@@ -29,7 +29,8 @@ backend_fan_restore_test = executable(
   link_args: ['-Wl,--wrap=execv'],
   install: false)
 
-foreach scenario : ['manual', 'incomplete', 'rejected', 'save', 'mode-switch', 'default']
+foreach scenario : ['manual', 'restore-mode-switch', 'restore-client-speed', 'incomplete',
+                    'rejected', 'save', 'mode-switch', 'default']
   test('backend-fan-restore-' + scenario, backend_fan_restore_test, args: [scenario])
 endforeach
 

@@ -50,6 +50,17 @@ static std::string read(const fs::path &path)
     return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
 }
 
+// Polls for up to 15 s, enough for the 10 s inter-fan gap.
+template <typename Condition>
+static bool wait_for(Condition condition)
+{
+    for (int i = 0; i < 300; ++i) {
+        if (condition()) return true;
+        usleep(50'000);
+    }
+    return condition();
+}
+
 static bool expect(bool condition, const char *message)
 {
     if (!condition) std::cerr << message << '\n';
@@ -76,17 +87,39 @@ int main(int argc, char **argv)
     bool ok = true;
     if (scenario == "manual") {
         std::ofstream(profile) << "MANUAL 0 4600\n";
+        auto started = std::chrono::steady_clock::now();
         ok &= expect(restore_saved_fan_mode(), "valid manual profile should be restored");
+        ok &= expect(std::chrono::steady_clock::now() - started < std::chrono::seconds(3),
+                     "restore must not hold startup for the inter-fan gap");
         ok &= expect(get_fan_mode() == "MANUAL", "manual profile should be active");
         ok &= expect(read(board / "fan1_target") == "0", "zero RPM should survive restore");
-        ok &= expect(read(board / "fan2_target") == "4600", "fan 2 target should be applied before restore returns");
         ok &= expect(get_manual_fan_target() == "0", "UI should receive the applied target");
+        ok &= expect(wait_for([&] { return read(board / "fan2_target") == "4600"; }),
+                     "fan 2 target should follow in the background");
+        ok &= expect(get_fan_mode() == "MANUAL", "manual profile should stay active");
+    } else if (scenario == "restore-mode-switch") {
+        std::ofstream(profile) << "MANUAL 4300 4600\n";
+        ok &= expect(restore_saved_fan_mode(), "valid manual profile should be restored");
+        ok &= expect(set_fan_mode("MAX") == "OK", "a client may switch mode while fan 2 is pending");
+        usleep(11'500'000);
+        ok &= expect(get_fan_mode() == "MAX", "the pending restore must not switch MAX back to manual");
+        ok &= expect(read(board / "fan2_target") == "1700", "the pending fan 2 target should be dropped");
+        ok &= expect(read(profile) == "MAX - -\n", "the client's choice should be saved");
+    } else if (scenario == "restore-client-speed") {
+        std::ofstream(profile) << "MANUAL 4300 4600\n";
+        ok &= expect(restore_saved_fan_mode(), "valid manual profile should be restored");
+        ok &= expect(set_fan_speed("2", "3000") == "OK", "a client may set fan 2 while the restore waits");
+        usleep(1'000'000);
+        ok &= expect(read(board / "fan2_target") == "3000", "the restore must not overwrite the client's fan 2");
+        ok &= expect(get_fan_mode() == "MANUAL", "manual should stay active");
+        ok &= expect(read(profile) == "MANUAL 4300 3000\n", "the client's speed should be saved");
     } else if (scenario == "incomplete" || scenario == "rejected") {
         const char *stored = scenario == "rejected" ? "MANUAL 4300 4600\n" : "MANUAL - 4600\n";
         std::ofstream(profile) << stored;
         if (scenario == "rejected") rejected_fan = 2;
         ok &= expect(restore_saved_fan_mode(), "startup should handle the manual restore failure");
-        ok &= expect(get_fan_mode() == "AUTO", "firmware AUTO should run after a failed manual restore");
+        ok &= expect(wait_for([] { return get_fan_mode() == "AUTO"; }),
+                     "firmware AUTO should run after a failed manual restore");
         ok &= expect(read(board / "fan2_target") == "1700", "rejected fan target should remain untouched");
         ok &= expect(read(profile) == stored, "fallback should preserve the saved file");
     } else if (scenario == "save") {

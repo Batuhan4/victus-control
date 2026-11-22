@@ -395,7 +395,8 @@ int main() {
                 << std::endl;
     }
   } else if (restore_saved_fan_mode()) {
-    // The saved profile or its firmware fallback is already active.
+    // The saved profile or its firmware fallback is active. A MANUAL restore
+    // finishes fan 2 in the background, so clients are served right away.
   } else if (get_fan_target_support() != "SUPPORTED") {
     std::cout << "This board exposes no fan speed targets; leaving the fans "
                  "to the firmware (AUTO and MAX remain available)."
