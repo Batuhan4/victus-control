@@ -83,5 +83,42 @@ int main() {
                  "both fan target files present means targets are supported");
   }
 
+  // --- remembered fan profile ----------------------------------------------
+  {
+    auto max = parse_fan_state("MAX - -\n");
+    ok &= expect(max && max->mode == "MAX" && !max->fan1_rpm && !max->fan2_rpm,
+                 "a saved MAX profile round-trips with no speeds");
+
+    auto manual = parse_fan_state("MANUAL 3600 3800");
+    ok &= expect(manual && manual->mode == "MANUAL" && manual->fan1_rpm == 3600 &&
+                     manual->fan2_rpm == 3800,
+                 "a saved MANUAL profile keeps both speeds");
+
+    auto partial = parse_fan_state("MANUAL 3600 -");
+    ok &= expect(partial && partial->fan1_rpm == 3600 && !partial->fan2_rpm,
+                 "a speed that was never set stays unset");
+
+    auto bare = parse_fan_state("BETTER_AUTO");
+    ok &= expect(bare && bare->mode == "BETTER_AUTO",
+                 "the speeds are optional");
+
+    auto damaged = parse_fan_state("MANUAL 36x0 -5");
+    ok &= expect(damaged && !damaged->fan1_rpm && !damaged->fan2_rpm,
+                 "damaged speeds are dropped without losing the mode");
+
+    ok &= expect(!parse_fan_state(""), "an empty file is no profile");
+    ok &= expect(!parse_fan_state("TURBO 1 2"), "an unknown mode is no profile");
+
+    SavedFanState state;
+    state.mode = "MANUAL";
+    state.fan1_rpm = 4200;
+    ok &= expect(format_fan_state(state) == "MANUAL 4200 -\n",
+                 "the file is one line with - for an unset speed");
+    auto again = parse_fan_state(format_fan_state(state));
+    ok &= expect(again && again->mode == "MANUAL" && again->fan1_rpm == 4200 &&
+                     !again->fan2_rpm,
+                 "what is written is what is read back");
+  }
+
   return ok ? 0 : 1;
 }

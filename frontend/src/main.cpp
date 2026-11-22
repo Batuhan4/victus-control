@@ -35,16 +35,16 @@ public:
 		// re-activates this one instead of building a second dashboard.
 		window = gtk_application_window_new(application);
 		gtk_window_set_title(GTK_WINDOW(window), "VICTUS CONTROL");
-		gtk_window_set_default_size(GTK_WINDOW(window), 900, 900);
+		gtk_window_set_default_size(GTK_WINDOW(window), 780, 880);
 
 		// One page with a card per subsystem, rather than tabs: both the
 		// keyboard and the fans are visible at once, which is the point of a
 		// control panel you glance at.
-		dashboard = gtk_box_new(GTK_ORIENTATION_VERTICAL, 18);
-		gtk_widget_set_margin_top(dashboard, 18);
-		gtk_widget_set_margin_bottom(dashboard, 18);
-		gtk_widget_set_margin_start(dashboard, 18);
-		gtk_widget_set_margin_end(dashboard, 18);
+		dashboard = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);
+		gtk_widget_set_margin_top(dashboard, 16);
+		gtk_widget_set_margin_bottom(dashboard, 16);
+		gtk_widget_set_margin_start(dashboard, 16);
+		gtk_widget_set_margin_end(dashboard, 16);
 
 		GtkWidget *scroller = gtk_scrolled_window_new();
 		gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller),
@@ -91,7 +91,8 @@ public:
 
 		menu = gtk_popover_new();
 		GtkWidget *menu_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
-		GtkWidget *about_button = gtk_button_new_with_label("About victus-control");
+		GtkWidget *about_button = gtk_button_new_with_label("About Victus Control");
+		gtk_widget_add_css_class(about_button, "flat");
 		g_signal_connect(about_button, "clicked", G_CALLBACK(on_about_clicked), this);
 
 		gtk_box_append(GTK_BOX(menu_box), about_button);

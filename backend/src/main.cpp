@@ -168,7 +168,7 @@ void handle_command(const std::string &command_str, int client_socket) {
     std::string speed;
     ss >> fan_num >> speed;
     if (!fan_num.empty() && !speed.empty() && !has_extra_tokens(ss)) {
-      response = set_fan_speed(fan_num, speed, true, true);
+      response = set_fan_speed(fan_num, speed);
     } else {
       response = "ERROR: Invalid SET_FAN_SPEED command format";
     }
@@ -181,8 +181,6 @@ void handle_command(const std::string &command_str, int client_socket) {
     } else {
       std::string mode = normalize_mode(remainder);
       response = set_fan_mode(mode);
-      if (response == "OK")
-        fan_mode_trigger(mode);
     }
   } else if (command == "GET_FAN_MODE") {
     if (!has_extra_tokens(ss)) {
@@ -190,6 +188,9 @@ void handle_command(const std::string &command_str, int client_socket) {
     } else {
       response = "ERROR: Invalid GET_FAN_MODE command format";
     }
+  } else if (command == "GET_MANUAL_FAN_TARGET") {
+    response = has_extra_tokens(ss) ? "ERROR: Invalid GET_MANUAL_FAN_TARGET command format"
+                                    : get_manual_fan_target();
   } else if (command == "GET_FAN_TARGET_SUPPORT") {
     if (!has_extra_tokens(ss)) {
       response = get_fan_target_support();
@@ -374,7 +375,8 @@ int main() {
 
   std::cout << "Server is listening..." << std::endl;
 
-  // The fans are left to the firmware in two cases. VICTUS_NO_FAN_CONTROL=1
+  // Unless the user saved a profile (restored first, see below), the fans
+  // are left to the firmware in two cases. VICTUS_NO_FAN_CONTROL=1
   // is for boards whose BIOS reports software fan support but ignores the RPM
   // targets: there the Better Auto loop would switch the fans to MANUAL and
   // then have no way to steer them. The other case is a board that exposes no
@@ -392,6 +394,8 @@ int main() {
       std::cerr << "Failed to hand the fans back to the firmware: " << result
                 << std::endl;
     }
+  } else if (restore_saved_fan_mode()) {
+    // The saved profile or its firmware fallback is already active.
   } else if (get_fan_target_support() != "SUPPORTED") {
     std::cout << "This board exposes no fan speed targets; leaving the fans "
                  "to the firmware (AUTO and MAX remain available)."

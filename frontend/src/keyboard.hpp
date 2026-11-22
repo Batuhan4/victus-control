@@ -82,7 +82,7 @@ private:
   static void on_keyboard_click(GtkGestureClick *gesture, int n_press, double x,
                                 double y, gpointer data);
   static void on_choose_color_clicked(GtkWidget *widget, gpointer data);
-  static void on_style_toggled(GtkCheckButton *button, gpointer data);
+  static void on_style_toggled(GtkToggleButton *button, gpointer data);
   static void on_power_switched(GObject *sw, GParamSpec *pspec, gpointer data);
   static void on_effect_speed_changed(GtkRange *range, gpointer data);
   static gboolean on_preview_tick(gpointer data);

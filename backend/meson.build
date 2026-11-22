@@ -21,6 +21,18 @@ backend_fan_support_test = executable(
 
 test('backend-fan-support', backend_fan_support_test)
 
+backend_fan_restore_test = executable(
+  'backend-fan-restore-test',
+  sources: ['tests/fan_restore_test.cpp', 'src/fan.cpp', 'src/validation.cpp'],
+  include_directories: include_directories('src'),
+  dependencies: [dependency('threads')],
+  link_args: ['-Wl,--wrap=execv'],
+  install: false)
+
+foreach scenario : ['manual', 'incomplete', 'rejected', 'save', 'mode-switch', 'default']
+  test('backend-fan-restore-' + scenario, backend_fan_restore_test, args: [scenario])
+endforeach
+
 install_data(
 	'victus-backend.service',
 	install_dir: '/etc/systemd/system'
